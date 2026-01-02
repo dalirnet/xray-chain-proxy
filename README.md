@@ -21,43 +21,42 @@ curl -sL https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/script
 chmod +x xcp.sh
 ```
 
-## Gateway Setup
+## Setup
 
-Run on your exit server (the one that connects to internet):
-
-```bash
-./xcp.sh install gateway
-```
-
-An initial `edge` account is created automatically.
-
-## Edge Setup
-
-Run on your entry server (the one clients connect to):
+On your **gateway** server (exit node):
 
 ```bash
-./xcp.sh install edge
+./xcp.sh setup gateway
 ```
 
-An initial `edge` account is created automatically.
+On your **edge** server (entry node):
+
+```bash
+./xcp.sh setup edge
+```
+
+An initial `edge` user is created automatically on both servers.
 
 ## Commands
 
-| Command           | Description                |
-| ----------------- | -------------------------- |
-| `install gateway` | Setup gateway              |
-| `install edge`    | Setup edge                 |
-| `account list`    | List accounts              |
-| `account add`     | Add account                |
-| `account remove`  | Remove account             |
-| `status`          | Show status                |
-| `stats`           | Traffic stats              |
-| `logs`            | View logs                  |
-| `test`            | Test proxy                 |
-| `update`          | Update Xray                |
-| `config loglevel` | Set log level              |
-| `config port`     | Change port                |
-| `uninstall`       | Remove Xray                |
+| Command         | Description                                 |
+| --------------- | ------------------------------------------- |
+| `setup gateway` | Install and configure gateway server        |
+| `setup edge`    | Install and configure edge server           |
+| `start`         | Start Xray service                          |
+| `stop`          | Stop Xray service                           |
+| `restart`       | Restart Xray service                        |
+| `status`        | Show Xray service status and version        |
+| `user ls`       | List all users with passwords and URIs      |
+| `user add`      | Add new user with QR code                   |
+| `user rm`       | Remove existing user                        |
+| `stats`         | Show traffic statistics per user            |
+| `logs [-f] [n]` | View last n logs, -f to follow in real-time |
+| `test`          | Test proxy connection and run speed test    |
+| `config ls`     | Show current configuration                  |
+| `config set`    | Set configuration (log level, port)         |
+| `update`        | Update Xray to latest version               |
+| `uninstall`     | Remove Xray and all configuration           |
 
 ## Files
 
@@ -66,6 +65,11 @@ An initial `edge` account is created automatically.
 | Binary | `/usr/local/xray/xray`        |
 | Config | `/usr/local/xray/config.json` |
 | Logs   | `/var/log/xray/`              |
+
+## Dependencies
+
+**Required:** curl, unzip, jq
+**Optional:** qrencode (QR codes), speedtest-cli (speed test)
 
 ## Links
 

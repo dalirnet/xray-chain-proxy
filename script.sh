@@ -9,19 +9,25 @@
 #
 # Flow: Client --> EDGE --> GATEWAY --> Internet
 #
+# Author: Amir Reza Dalir (dalirnet@gmail.com)
+# License: MIT
+#
 # Usage:
-#   script.sh install gateway   - Setup gateway server
-#   script.sh install edge      - Setup edge server
-#   script.sh account list      - List all accounts
-#   script.sh account add       - Add new account
-#   script.sh account remove    - Remove account
+#   script.sh setup gateway     - Setup gateway server
+#   script.sh setup edge        - Setup edge server
+#   script.sh start             - Start Xray service
+#   script.sh stop              - Stop Xray service
+#   script.sh restart           - Restart Xray service
 #   script.sh status            - Show service status
+#   script.sh user ls           - List all users
+#   script.sh user add          - Add new user
+#   script.sh user rm           - Remove user
 #   script.sh stats             - Show traffic statistics
-#   script.sh logs [n]          - Show last n log lines
+#   script.sh logs [-f] [n]     - Show logs (-f to follow)
 #   script.sh test              - Test proxy and speed
+#   script.sh config ls         - Show current config
+#   script.sh config set        - Set config value
 #   script.sh update            - Update Xray to latest version
-#   script.sh config loglevel   - Set log level (none/warning/info/debug)
-#   script.sh config port       - Change listen port
 #   script.sh uninstall         - Remove Xray completely
 #
 
@@ -137,19 +143,29 @@ format_bytes() {
 check_dependencies() {
     log_step "Checking dependencies"
 
-    local missing=()
-    for cmd in curl unzip jq qrencode speedtest-cli; do
-        command -v "$cmd" &>/dev/null || missing+=("$cmd")
+    # Required dependencies
+    local required=()
+    for cmd in curl unzip jq; do
+        command -v "$cmd" &>/dev/null || required+=("$cmd")
     done
 
-    if [[ ${#missing[@]} -eq 0 ]]; then
-        log_info "All dependencies installed"
-        return 0
+    if [[ ${#required[@]} -gt 0 ]]; then
+        log_info "Installing required: ${required[*]}"
+        apt-get update -qq && apt-get install -y -qq "${required[@]}" || log_error "Failed to install dependencies"
     fi
 
-    log_info "Installing: ${missing[*]}"
-    apt-get update -qq && apt-get install -y -qq "${missing[@]}" || log_error "Failed to install dependencies"
-    log_success "Dependencies installed"
+    # Optional dependencies (ignore if install fails)
+    local optional=()
+    for cmd in qrencode speedtest-cli; do
+        command -v "$cmd" &>/dev/null || optional+=("$cmd")
+    done
+
+    if [[ ${#optional[@]} -gt 0 ]]; then
+        log_info "Installing optional: ${optional[*]}"
+        apt-get install -y -qq "${optional[@]}" 2>/dev/null || log_warn "Optional dependencies not installed: ${optional[*]}"
+    fi
+
+    log_success "Dependencies ready"
 }
 
 # Install Xray-core
@@ -552,8 +568,8 @@ setup_edge() {
     echo -e "  Password: ${YELLOW}$EDGE_PASS${NC}\n"
 }
 
-# List all accounts
-account_list() {
+# List all users
+user_ls() {
     [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
     jq -e '.inbounds[] | select(.tag == "ss-in") | .settings.clients' "$XRAY_CONFIG" &>/dev/null || log_error "No accounts configured"
 
@@ -578,8 +594,8 @@ account_list() {
     fi
 }
 
-# Add new account
-account_add() {
+# Add new user
+user_add() {
     check_root
     [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
     jq -e '.inbounds[] | select(.tag == "ss-in") | .settings.clients' "$XRAY_CONFIG" &>/dev/null || log_error "No accounts configured"
@@ -610,12 +626,14 @@ account_add() {
     echo -e "  Port:     ${YELLOW}$PORT${NC}"
     echo -e "  Password: ${YELLOW}$PASS${NC}\n"
 
-    qrencode -t ANSIUTF8 "$URI"
+    if command -v qrencode &>/dev/null; then
+        qrencode -t ANSIUTF8 "$URI"
+    fi
     echo "$URI"
 }
 
-# Remove account
-account_remove() {
+# Remove user
+user_rm() {
     check_root
     [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
     jq -e '.inbounds[] | select(.tag == "ss-in") | .settings.clients' "$XRAY_CONFIG" &>/dev/null || log_error "No accounts configured"
@@ -637,14 +655,37 @@ account_remove() {
     log_success "Account '$EMAIL' removed"
 }
 
-# Account command router
-account_cmd() {
+# User command router
+user_cmd() {
     case "${1:-}" in
-        list)   account_list ;;
-        add)    account_add ;;
-        remove) account_remove ;;
-        *)      echo -e "\nUsage: $SCRIPT_NAME account <list|add|remove>\n" ;;
+        ls)   user_ls ;;
+        add)  user_add ;;
+        rm)   user_rm ;;
+        *)    echo -e "\nUsage: $SCRIPT_NAME user <ls|add|rm>\n" ;;
     esac
+}
+
+# Start Xray service
+service_start() {
+    check_root
+    [[ -f "$XRAY_BIN" ]] || log_error "Xray not installed"
+    systemctl start xray
+    log_success "Xray started"
+}
+
+# Stop Xray service
+service_stop() {
+    check_root
+    systemctl stop xray 2>/dev/null || true
+    log_success "Xray stopped"
+}
+
+# Restart Xray service
+service_restart() {
+    check_root
+    [[ -f "$XRAY_BIN" ]] || log_error "Xray not installed"
+    systemctl restart xray
+    log_success "Xray restarted"
 }
 
 # Set log level
@@ -712,12 +753,55 @@ config_port() {
     log_success "Port changed to $PORT"
 }
 
+# Show current config
+config_ls() {
+    [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
+
+    local type=$(jq -r '.xcp.type // "unknown"' "$XRAY_CONFIG")
+    local version=$(jq -r '.xcp.version // "unknown"' "$XRAY_CONFIG")
+    local port=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local loglevel=$(jq -r '.log.loglevel // "warning"' "$XRAY_CONFIG")
+
+    echo -e "\n${BOLD}Config:${NC}\n"
+    echo -e "  Type:      ${YELLOW}$type${NC}"
+    echo -e "  Version:   ${YELLOW}$version${NC}"
+    echo -e "  Port:      ${YELLOW}$port${NC}"
+    echo -e "  Log level: ${YELLOW}$loglevel${NC}"
+
+    if [[ "$type" == "edge" ]]; then
+        local gw_ip=$(jq -r '.outbounds[] | select(.tag == "proxy") | .settings.servers[0].address' "$XRAY_CONFIG")
+        local gw_port=$(jq -r '.outbounds[] | select(.tag == "proxy") | .settings.servers[0].port' "$XRAY_CONFIG")
+        echo -e "  Gateway:   ${YELLOW}$gw_ip:$gw_port${NC}"
+    fi
+
+    echo
+}
+
+# Config set submenu
+config_set() {
+    echo -e "\n${BOLD}Set Config:${NC}\n"
+    echo "  1) loglevel - Set log level"
+    echo "  2) port     - Change listen port"
+    echo
+
+    local choice
+    read -rp "Select option (1-2): " choice
+
+    case "$choice" in
+        1|loglevel) config_loglevel ;;
+        2|port)     config_port ;;
+        *)          log_error "Invalid option" ;;
+    esac
+}
+
 # Config command router
 config_cmd() {
     case "${1:-}" in
+        ls)       config_ls ;;
+        set)      config_set ;;
         loglevel) config_loglevel ;;
         port)     config_port ;;
-        *)        echo -e "\nUsage: $SCRIPT_NAME config <loglevel|port>\n" ;;
+        *)        echo -e "\nUsage: $SCRIPT_NAME config <ls|set>\n" ;;
     esac
 }
 
@@ -774,14 +858,28 @@ show_stats() {
 
 # Show logs
 show_logs() {
-    local n="${1:-50}"
+    local follow=false
+    local n=50
 
-    echo -e "\n${BOLD}Logs (last $n):${NC}\n"
+    # Parse arguments
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            -f|--follow) follow=true; shift ;;
+            *)           n="$1"; shift ;;
+        esac
+    done
 
-    if [[ -f "$LOG_DIR/access.log" ]]; then
-        tail -n "$n" "$LOG_DIR/access.log"
-    else
+    if [[ ! -f "$LOG_DIR/access.log" ]]; then
         echo "No logs"
+        return
+    fi
+
+    if [[ "$follow" == "true" ]]; then
+        echo -e "${BOLD}Following logs (Ctrl+C to stop):${NC}\n"
+        tail -f "$LOG_DIR/access.log"
+    else
+        echo -e "\n${BOLD}Logs (last $n):${NC}\n"
+        tail -n "$n" "$LOG_DIR/access.log"
     fi
 }
 
@@ -803,25 +901,25 @@ test_proxy() {
         fi
     fi
 
-    echo -e "\n${BOLD}Speed Test:${NC}\n"
+    if command -v speedtest-cli &>/dev/null; then
+        echo -e "\n${BOLD}Speed Test:${NC}\n"
 
-    command -v speedtest-cli &>/dev/null || { echo -e "${RED}speedtest-cli not installed${NC}"; return 1; }
+        local result=$(speedtest-cli --simple 2>/dev/null)
 
-    local result=$(speedtest-cli --simple 2>/dev/null)
+        if [[ -n "$result" ]]; then
+            local ping=$(echo "$result" | grep "Ping:" | awk '{print $2, $3}')
+            local down=$(echo "$result" | grep "Download:" | awk '{print $2, $3}')
+            local up=$(echo "$result" | grep "Upload:" | awk '{print $2, $3}')
 
-    if [[ -n "$result" ]]; then
-        local ping=$(echo "$result" | grep "Ping:" | awk '{print $2, $3}')
-        local down=$(echo "$result" | grep "Download:" | awk '{print $2, $3}')
-        local up=$(echo "$result" | grep "Upload:" | awk '{print $2, $3}')
+            echo -e "  Ping:     ${YELLOW}$ping${NC}"
+            echo -e "  Download: ${YELLOW}$down${NC}"
+            echo -e "  Upload:   ${YELLOW}$up${NC}"
+        else
+            echo -e "${RED}Speed test failed${NC}"
+        fi
 
-        echo -e "  Ping:     ${YELLOW}$ping${NC}"
-        echo -e "  Download: ${YELLOW}$down${NC}"
-        echo -e "  Upload:   ${YELLOW}$up${NC}"
-    else
-        echo -e "${RED}Speed test failed${NC}"
+        echo
     fi
-
-    echo
 }
 
 # Update Xray to latest version
@@ -874,18 +972,26 @@ Xray Chain Proxy v${VERSION}
 Usage: $SCRIPT_NAME <command>
 
 Commands:
-  install gateway   Setup gateway (exit node)
-  install edge      Setup edge (entry node)
-  account list      List accounts
-  account add       Add account
-  account remove    Remove account
-  status            Show status
+  setup gateway     Setup gateway (exit node)
+  setup edge        Setup edge (entry node)
+
+  start             Start Xray service
+  stop              Stop Xray service
+  restart           Restart Xray service
+  status            Show service status
+
+  user ls           List users
+  user add          Add user
+  user rm           Remove user
+
   stats             Show traffic stats
-  logs [n]          Show logs
+  logs [-f] [n]     Show logs (-f to follow)
   test              Test proxy and speed
+
+  config ls         Show current config
+  config set        Set config value
+
   update            Update Xray
-  config loglevel   Set log level
-  config port       Change listen port
   uninstall         Remove Xray
 
 Flow: Client --> EDGE --> GATEWAY --> Internet
@@ -893,25 +999,28 @@ Flow: Client --> EDGE --> GATEWAY --> Internet
 EOF
 }
 
-# Install command router
-install_cmd() {
+# Setup command router
+setup_cmd() {
     case "${1:-}" in
         gateway) setup_gateway ;;
         edge)    setup_edge ;;
-        *)       echo -e "\nUsage: $SCRIPT_NAME install <gateway|edge>\n" ;;
+        *)       echo -e "\nUsage: $SCRIPT_NAME setup <gateway|edge>\n" ;;
     esac
 }
 
 # Main entry point
 main() {
     case "${1:-help}" in
-        install)   install_cmd "${2:-}" ;;
-        account)   account_cmd "${2:-}" ;;
-        config)    config_cmd "${2:-}" ;;
+        setup)     setup_cmd "${2:-}" ;;
+        start)     service_start ;;
+        stop)      service_stop ;;
+        restart)   service_restart ;;
         status)    show_status ;;
+        user)      user_cmd "${2:-}" ;;
         stats)     show_stats ;;
-        logs)      show_logs "${2:-50}" ;;
+        logs)      shift; show_logs "$@" ;;
         test)      test_proxy ;;
+        config)    config_cmd "${2:-}" ;;
         update)    update_xray ;;
         uninstall) check_root; uninstall_xray ;;
         help|--help|-h) show_help ;;
