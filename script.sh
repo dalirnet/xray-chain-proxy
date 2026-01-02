@@ -22,7 +22,6 @@
 #   script.sh update            - Update Xray to latest version
 #   script.sh config loglevel   - Set log level (none/warning/info/debug)
 #   script.sh config port       - Change listen port
-#   script.sh config gateway    - Change gateway settings (edge only)
 #   script.sh uninstall         - Remove Xray completely
 #
 
@@ -713,47 +712,12 @@ config_port() {
     log_success "Port changed to $PORT"
 }
 
-# Change gateway settings (edge only)
-config_gateway() {
-    check_root
-    [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
-
-    # Check if this is an edge server
-    [[ $(jq -r '.xcp.type // ""' "$XRAY_CONFIG") == "edge" ]] || log_error "This command is only for EDGE servers"
-
-    local current_ip=$(jq -r '.outbounds[] | select(.tag == "proxy") | .settings.servers[0].address' "$XRAY_CONFIG")
-    local current_port=$(jq -r '.outbounds[] | select(.tag == "proxy") | .settings.servers[0].port' "$XRAY_CONFIG")
-    local current_pass=$(jq -r '.outbounds[] | select(.tag == "proxy") | .settings.servers[0].password' "$XRAY_CONFIG")
-
-    echo -e "\n${BOLD}Gateway Settings${NC}\n"
-    echo -e "Current:"
-    echo -e "  IP:       ${YELLOW}$current_ip${NC}"
-    echo -e "  Port:     ${YELLOW}$current_port${NC}"
-    echo -e "  Password: ${YELLOW}$current_pass${NC}\n"
-
-    local GW_IP GW_PORT GW_PASS
-    prompt_address "Gateway IP" GW_IP
-    prompt_port "Gateway port" "$current_port" GW_PORT
-    prompt_password "Gateway password" "false" GW_PASS
-
-    local TMP=$(mktemp)
-    jq --arg ip "$GW_IP" --argjson port "$GW_PORT" --arg pass "$GW_PASS" \
-        '.outbounds |= map(if .tag == "proxy" then .settings.servers[0].address = $ip | .settings.servers[0].port = $port | .settings.servers[0].password = $pass else . end)' \
-        "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
-
-    validate_config
-    systemctl restart xray
-
-    log_success "Gateway settings updated"
-}
-
 # Config command router
 config_cmd() {
     case "${1:-}" in
         loglevel) config_loglevel ;;
         port)     config_port ;;
-        gateway)  config_gateway ;;
-        *)        echo -e "\nUsage: $SCRIPT_NAME config <loglevel|port|gateway>\n" ;;
+        *)        echo -e "\nUsage: $SCRIPT_NAME config <loglevel|port>\n" ;;
     esac
 }
 
@@ -922,7 +886,6 @@ Commands:
   update            Update Xray
   config loglevel   Set log level
   config port       Change listen port
-  config gateway    Change gateway (edge only)
   uninstall         Remove Xray
 
 Flow: Client --> EDGE --> GATEWAY --> Internet

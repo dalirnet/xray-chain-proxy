@@ -57,7 +57,6 @@ An initial `edge` account is created automatically.
 | `update`          | Update Xray                |
 | `config loglevel` | Set log level              |
 | `config port`     | Change port                |
-| `config gateway`  | Change gateway (edge only) |
 | `uninstall`       | Remove Xray                |
 
 ## Files
