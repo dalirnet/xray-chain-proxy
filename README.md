@@ -1,6 +1,6 @@
 # Xray Chain Proxy
 
-Chain proxy with two servers using Xray-core. EDGE (entry node) forwards traffic to GATEWAY (exit node). Hides GATEWAY IP, allows multiple EDGEs per GATEWAY, per-user stats and QR codes.
+Enabling free internet access for people in countries isolated from the global internet, like Iran. Built on Xray-core, it uses a chain proxy architecture with two servers: EDGE (entry node) forwards traffic to GATEWAY (exit node), providing reliable connectivity and freedom of information.
 
 ```
 Client --> EDGE --> GATEWAY --> Internet
