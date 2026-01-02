@@ -20,6 +20,9 @@
 #   script.sh logs [n]          - Show last n log lines
 #   script.sh test              - Test proxy and speed
 #   script.sh update            - Update Xray to latest version
+#   script.sh config loglevel   - Set log level (none/warning/info/debug)
+#   script.sh config port       - Change listen port
+#   script.sh config gateway    - Change gateway settings (edge only)
 #   script.sh uninstall         - Remove Xray completely
 #
 
@@ -281,8 +284,12 @@ gen_gateway_config() {
 
     cat << EOF
 {
+  "xcp": {
+    "type": "gateway",
+    "version": "${VERSION}"
+  },
   "log": {
-    "loglevel": "warning",
+    "loglevel": "error",
     "access": "${LOG_DIR}/access.log",
     "error": "${LOG_DIR}/error.log"
   },
@@ -363,8 +370,12 @@ gen_edge_config() {
 
     cat << EOF
 {
+  "xcp": {
+    "type": "edge",
+    "version": "${VERSION}"
+  },
   "log": {
-    "loglevel": "warning",
+    "loglevel": "error",
     "access": "${LOG_DIR}/access.log",
     "error": "${LOG_DIR}/error.log"
   },
@@ -545,31 +556,39 @@ setup_edge() {
 # List all accounts
 account_list() {
     [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
-    grep -q '"clients"' "$XRAY_CONFIG" || log_error "No accounts configured"
+    jq -e '.inbounds[] | select(.tag == "ss-in") | .settings.clients' "$XRAY_CONFIG" &>/dev/null || log_error "No accounts configured"
+
+    local IP=$(get_public_ip)
+    local PORT=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local clients=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .settings.clients[] | "\(.email)|\(.password)"' "$XRAY_CONFIG" 2>/dev/null)
 
     echo -e "\n${BOLD}Accounts:${NC}\n"
-
-    local clients=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .settings.clients[] | .email' "$XRAY_CONFIG" 2>/dev/null)
 
     if [[ -z "$clients" ]]; then
         echo "  No accounts"
     else
-        echo "$clients" | nl -w2 -s') '
+        local i=1
+        while IFS='|' read -r email pass; do
+            local uri=$(gen_ss_uri "$ENCRYPTION_METHOD" "$pass" "$IP" "$PORT" "$email")
+            echo -e "${CYAN}$i) $email${NC}"
+            echo -e "   Password: ${YELLOW}$pass${NC}"
+            echo "   URI: $uri"
+            echo
+            ((i++))
+        done <<< "$clients"
     fi
-
-    echo
 }
 
 # Add new account
 account_add() {
     check_root
     [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
-    grep -q '"clients"' "$XRAY_CONFIG" || log_error "No accounts configured"
+    jq -e '.inbounds[] | select(.tag == "ss-in") | .settings.clients' "$XRAY_CONFIG" &>/dev/null || log_error "No accounts configured"
 
     local EMAIL PASS
     read -rp "Username: " EMAIL
     [[ -z "$EMAIL" ]] && log_error "Username required"
-    grep -q "\"email\":\"$EMAIL\"" "$XRAY_CONFIG" && log_error "Account exists"
+    jq -e --arg e "$EMAIL" '.inbounds[] | select(.tag == "ss-in") | .settings.clients[] | select(.email == $e)' "$XRAY_CONFIG" &>/dev/null && log_error "Account exists"
 
     prompt_password "Password" "true" PASS
 
@@ -587,24 +606,25 @@ account_add() {
     local IP=$(get_public_ip)
     local URI=$(gen_ss_uri "$ENCRYPTION_METHOD" "$PASS" "$IP" "$PORT" "$EMAIL")
 
-    echo -e "\n${GREEN}Account Added${NC}"
-    echo -e "Username: ${YELLOW}$EMAIL${NC}"
-    echo -e "Password: ${YELLOW}$PASS${NC}"
-    echo -e "URI: ${YELLOW}$URI${NC}\n"
+    echo -e "\n${GREEN}Account '$EMAIL' Added${NC}"
+    echo -e "  IP:       ${YELLOW}$IP${NC}"
+    echo -e "  Port:     ${YELLOW}$PORT${NC}"
+    echo -e "  Password: ${YELLOW}$PASS${NC}\n"
 
     qrencode -t ANSIUTF8 "$URI"
+    echo "$URI"
 }
 
 # Remove account
 account_remove() {
     check_root
     [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
-    grep -q '"clients"' "$XRAY_CONFIG" || log_error "No accounts configured"
+    jq -e '.inbounds[] | select(.tag == "ss-in") | .settings.clients' "$XRAY_CONFIG" &>/dev/null || log_error "No accounts configured"
 
     local EMAIL
     read -rp "Username to remove: " EMAIL
     [[ -z "$EMAIL" ]] && log_error "Username required"
-    grep -q "\"email\":\"$EMAIL\"" "$XRAY_CONFIG" || log_error "Account not found"
+    jq -e --arg e "$EMAIL" '.inbounds[] | select(.tag == "ss-in") | .settings.clients[] | select(.email == $e)' "$XRAY_CONFIG" &>/dev/null || log_error "Account not found"
 
     local TMP=$(mktemp)
 
@@ -625,6 +645,115 @@ account_cmd() {
         add)    account_add ;;
         remove) account_remove ;;
         *)      echo -e "\nUsage: $SCRIPT_NAME account <list|add|remove>\n" ;;
+    esac
+}
+
+# Set log level
+config_loglevel() {
+    check_root
+    [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
+
+    local current=$(jq -r '.log.loglevel // "warning"' "$XRAY_CONFIG")
+    echo -e "\n${BOLD}Log Level${NC}\n"
+    echo -e "Current: ${YELLOW}$current${NC}\n"
+    echo "Options:"
+    echo "  none    - No logging"
+    echo "  warning - Warnings and errors only"
+    echo "  info    - General information"
+    echo "  debug   - Detailed debug info"
+    echo
+
+    local LEVEL
+    read -rp "New level (none/warning/info/debug): " LEVEL
+
+    case "$LEVEL" in
+        none|warning|info|debug) ;;
+        *) log_error "Invalid level. Use: none, warning, info, debug" ;;
+    esac
+
+    local TMP=$(mktemp)
+
+    if [[ "$LEVEL" == "none" ]]; then
+        jq '.log.loglevel = "none" | .log.access = "none" | .log.error = "none"' "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
+    else
+        jq --arg l "$LEVEL" --arg a "${LOG_DIR}/access.log" --arg e "${LOG_DIR}/error.log" \
+            '.log.loglevel = $l | .log.access = $a | .log.error = $e' "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
+    fi
+
+    validate_config
+    systemctl restart xray
+
+    log_success "Log level set to '$LEVEL'"
+}
+
+# Change listen port
+config_port() {
+    check_root
+    [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
+
+    local current=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    echo -e "\n${BOLD}Listen Port${NC}\n"
+    echo -e "Current: ${YELLOW}$current${NC}\n"
+
+    local PORT
+    prompt_port "New port" "$current" PORT
+
+    if [[ "$PORT" == "$current" ]]; then
+        log_info "Port unchanged"
+        return
+    fi
+
+    local TMP=$(mktemp)
+    jq --argjson p "$PORT" '.inbounds |= map(if .tag == "ss-in" then .port = $p else . end)' "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
+
+    validate_config
+    configure_firewall "$PORT"
+    systemctl restart xray
+
+    log_success "Port changed to $PORT"
+}
+
+# Change gateway settings (edge only)
+config_gateway() {
+    check_root
+    [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
+
+    # Check if this is an edge server
+    [[ $(jq -r '.xcp.type // ""' "$XRAY_CONFIG") == "edge" ]] || log_error "This command is only for EDGE servers"
+
+    local current_ip=$(jq -r '.outbounds[] | select(.tag == "proxy") | .settings.servers[0].address' "$XRAY_CONFIG")
+    local current_port=$(jq -r '.outbounds[] | select(.tag == "proxy") | .settings.servers[0].port' "$XRAY_CONFIG")
+    local current_pass=$(jq -r '.outbounds[] | select(.tag == "proxy") | .settings.servers[0].password' "$XRAY_CONFIG")
+
+    echo -e "\n${BOLD}Gateway Settings${NC}\n"
+    echo -e "Current:"
+    echo -e "  IP:       ${YELLOW}$current_ip${NC}"
+    echo -e "  Port:     ${YELLOW}$current_port${NC}"
+    echo -e "  Password: ${YELLOW}$current_pass${NC}\n"
+
+    local GW_IP GW_PORT GW_PASS
+    prompt_address "Gateway IP" GW_IP
+    prompt_port "Gateway port" "$current_port" GW_PORT
+    prompt_password "Gateway password" "false" GW_PASS
+
+    local TMP=$(mktemp)
+    jq --arg ip "$GW_IP" --argjson port "$GW_PORT" --arg pass "$GW_PASS" \
+        '.outbounds |= map(if .tag == "proxy" then .settings.servers[0].address = $ip | .settings.servers[0].port = $port | .settings.servers[0].password = $pass else . end)' \
+        "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
+
+    validate_config
+    systemctl restart xray
+
+    log_success "Gateway settings updated"
+}
+
+# Config command router
+config_cmd() {
+    case "${1:-}" in
+        loglevel) config_loglevel ;;
+        port)     config_port ;;
+        gateway)  config_gateway ;;
+        *)        echo -e "\nUsage: $SCRIPT_NAME config <loglevel|port|gateway>\n" ;;
     esac
 }
 
@@ -651,13 +780,16 @@ show_stats() {
 
     echo -e "\n${BOLD}Traffic Stats:${NC}\n"
 
-    local users=$(echo "$stats" | grep "user>>>" | sed 's/.*user>>>\([^>]*\)>>>.*/\1/' | sort -u)
+    # Parse users from JSON
+    local users=$(echo "$stats" | jq -r '.stat[] | select(.name | startswith("user>>>")) | .name | split(">>>")[1]' 2>/dev/null | sort -u)
 
     if [[ -n "$users" ]]; then
         echo -e "${CYAN}Users:${NC}"
         while read -r user; do
-            local up=$(echo "$stats" | grep "user>>>$user>>>traffic>>>uplink" | sed 's/.*value:[[:space:]]*\([0-9]*\).*/\1/' || echo 0)
-            local down=$(echo "$stats" | grep "user>>>$user>>>traffic>>>downlink" | sed 's/.*value:[[:space:]]*\([0-9]*\).*/\1/' || echo 0)
+            local up=$(echo "$stats" | jq -r --arg u "$user" '.stat[] | select(.name == "user>>>\($u)>>>traffic>>>uplink") | .value // 0' 2>/dev/null)
+            local down=$(echo "$stats" | jq -r --arg u "$user" '.stat[] | select(.name == "user>>>\($u)>>>traffic>>>downlink") | .value // 0' 2>/dev/null)
+            [[ -z "$up" ]] && up=0
+            [[ -z "$down" ]] && down=0
             echo "  $user: ↑$(format_bytes $up) ↓$(format_bytes $down)"
         done <<< "$users"
         echo
@@ -665,12 +797,12 @@ show_stats() {
 
     echo -e "${CYAN}System:${NC}"
 
-    local in_up=$(echo "$stats" | grep "inbound>>>.*uplink" | sed 's/.*value:[[:space:]]*\([0-9]*\).*/\1/' | awk '{s+=$1}END{print s+0}')
-    local in_down=$(echo "$stats" | grep "inbound>>>.*downlink" | sed 's/.*value:[[:space:]]*\([0-9]*\).*/\1/' | awk '{s+=$1}END{print s+0}')
+    local in_up=$(echo "$stats" | jq '[.stat[] | select(.name | startswith("inbound>>>") and endswith(">>>uplink")) | .value // 0] | add // 0' 2>/dev/null)
+    local in_down=$(echo "$stats" | jq '[.stat[] | select(.name | startswith("inbound>>>") and endswith(">>>downlink")) | .value // 0] | add // 0' 2>/dev/null)
     echo "  Inbound:  ↑$(format_bytes $in_up) ↓$(format_bytes $in_down)"
 
-    local out_up=$(echo "$stats" | grep "outbound>>>.*uplink" | sed 's/.*value:[[:space:]]*\([0-9]*\).*/\1/' | awk '{s+=$1}END{print s+0}')
-    local out_down=$(echo "$stats" | grep "outbound>>>.*downlink" | sed 's/.*value:[[:space:]]*\([0-9]*\).*/\1/' | awk '{s+=$1}END{print s+0}')
+    local out_up=$(echo "$stats" | jq '[.stat[] | select(.name | startswith("outbound>>>") and endswith(">>>uplink")) | .value // 0] | add // 0' 2>/dev/null)
+    local out_down=$(echo "$stats" | jq '[.stat[] | select(.name | startswith("outbound>>>") and endswith(">>>downlink")) | .value // 0] | add // 0' 2>/dev/null)
     echo "  Outbound: ↑$(format_bytes $out_up) ↓$(format_bytes $out_down)"
 
     echo
@@ -694,7 +826,7 @@ test_proxy() {
     systemctl is-active xray &>/dev/null || { echo -e "${RED}Xray not running${NC}"; return 1; }
 
     # EDGE server - test through proxy
-    if grep -q '"socks-local"' "$XRAY_CONFIG" 2>/dev/null; then
+    if [[ $(jq -r '.xcp.type // ""' "$XRAY_CONFIG") == "edge" ]]; then
         echo -e "\n${BOLD}Testing proxy...${NC}\n"
 
         local res=$(curl -s --proxy "socks5://127.0.0.1:8080" --connect-timeout 10 "http://ip-api.com/line/?fields=query" 2>/dev/null)
@@ -788,6 +920,9 @@ Commands:
   logs [n]          Show logs
   test              Test proxy and speed
   update            Update Xray
+  config loglevel   Set log level
+  config port       Change listen port
+  config gateway    Change gateway (edge only)
   uninstall         Remove Xray
 
 Flow: Client --> EDGE --> GATEWAY --> Internet
@@ -809,6 +944,7 @@ main() {
     case "${1:-help}" in
         install)   install_cmd "${2:-}" ;;
         account)   account_cmd "${2:-}" ;;
+        config)    config_cmd "${2:-}" ;;
         status)    show_status ;;
         stats)     show_stats ;;
         logs)      show_logs "${2:-50}" ;;

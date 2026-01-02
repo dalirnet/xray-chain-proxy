@@ -1,10 +1,18 @@
 # Xray Chain Proxy
 
-Enabling free internet access for people in countries isolated from the global internet, like Iran. Built on Xray-core, it uses a chain proxy architecture with two servers: EDGE (entry node) forwards traffic to GATEWAY (exit node), providing reliable connectivity and freedom of information.
+Enabling free internet access for people in countries isolated from the global internet, like Iran. Built on Xray-core, it uses a chain proxy architecture with two servers: EDGE (entry node) forwards traffic to GATEWAY (exit node), providing reliable connectivity and freedom of information. Uses Shadowsocks protocol for secure, encrypted communication.
 
 ```
 Client --> EDGE --> GATEWAY --> Internet
 ```
+
+## Prerequisites
+
+- Two Debian/Ubuntu servers with root access
+- GATEWAY: Exit server with unrestricted internet access
+- EDGE: Entry server accessible to clients
+
+> Tested on Ubuntu 22.04.5 LTS. Other Ubuntu/Debian versions may work but might require adjustments. Other distros require manual handling of install commands.
 
 ## Install
 
@@ -21,22 +29,7 @@ Run on your exit server (the one that connects to internet):
 ./xcp.sh install gateway
 ```
 
-Input:
-```
-Listen port (default: 80): <GATEWAY_PORT>
-```
-
-Output:
-```
-GATEWAY Ready!
-
-Use on EDGE server:
-  IP:       <GATEWAY_IP>
-  Port:     <GATEWAY_PORT>
-  Password: <GATEWAY_PASSWORD>
-```
-
-Save these values for EDGE setup. An initial `edge` account is created automatically.
+An initial `edge` account is created automatically.
 
 ## Edge Setup
 
@@ -46,43 +39,26 @@ Run on your entry server (the one clients connect to):
 ./xcp.sh install edge
 ```
 
-Input:
-```
-Gateway IP: <GATEWAY_IP>
-Gateway port (default: 80): <GATEWAY_PORT>
-Gateway password: <GATEWAY_PASSWORD>
-Listen port (default: 80): <EDGE_PORT>
-```
-
-Output:
-```
-EDGE Ready!
-
-Chain: Client -> <EDGE_IP>:<EDGE_PORT> -> <GATEWAY_IP>:<GATEWAY_PORT> -> Internet
-
-Use on Xray client:
-  IP:       <EDGE_IP>
-  Port:     <EDGE_PORT>
-  Password: <EDGE_PASSWORD>
-```
-
 An initial `edge` account is created automatically.
 
 ## Commands
 
-| Command           | Description    |
-| ----------------- | -------------- |
-| `install gateway` | Setup gateway  |
-| `install edge`    | Setup edge     |
-| `account list`    | List accounts  |
-| `account add`     | Add account    |
-| `account remove`  | Remove account |
-| `status`          | Show status    |
-| `stats`           | Traffic stats  |
-| `logs`            | View logs      |
-| `test`            | Test proxy     |
-| `update`          | Update Xray    |
-| `uninstall`       | Remove Xray    |
+| Command           | Description                |
+| ----------------- | -------------------------- |
+| `install gateway` | Setup gateway              |
+| `install edge`    | Setup edge                 |
+| `account list`    | List accounts              |
+| `account add`     | Add account                |
+| `account remove`  | Remove account             |
+| `status`          | Show status                |
+| `stats`           | Traffic stats              |
+| `logs`            | View logs                  |
+| `test`            | Test proxy                 |
+| `update`          | Update Xray                |
+| `config loglevel` | Set log level              |
+| `config port`     | Change port                |
+| `config gateway`  | Change gateway (edge only) |
+| `uninstall`       | Remove Xray                |
 
 ## Files
 
