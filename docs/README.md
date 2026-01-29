@@ -1,48 +1,55 @@
 # Xray Chain Proxy
 
-> Chain proxy for bypassing internet censorship
+> **Version 2.0.0** | [Changelog](changelog.md)
+
+Chain proxy for bypassing internet censorship, built on [Xray-core](https://github.com/XTLS/Xray-core).
+
+## Architecture
 
 ```
 Client --> EDGE --> GATEWAY --> Internet
 ```
 
-| Server    | Role                                         |
-| --------- | -------------------------------------------- |
-| `GATEWAY` | Exit node with unrestricted internet         |
-| `EDGE`    | Entry node clients connect to                |
+| Server    | Role                                 |
+| --------- | ------------------------------------ |
+| `GATEWAY` | Exit node with unrestricted internet |
+| `EDGE`    | Entry node, forwards to GATEWAY      |
 
 ## Features
 
-- **Multi-Protocol** - Shadowsocks (443), HTTP (80), SOCKS5 (1080)
-- **Chain Architecture** - Multiple hops for privacy
-- **User Management** - Add/remove users with QR codes
-- **Traffic Stats** - Monitor bandwidth per user
+- Multi-protocol: Shadowsocks, HTTP, SOCKS5
+- Chain architecture with multiple hops
+- User management with QR codes
+- Traffic statistics per user
+- Auto-update support
 
-## Quick Start
+## Protocols & Ports
 
-```bash
-# Download
-curl -sL https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/script.sh -o xcp.sh
-chmod +x xcp.sh
+| Protocol    | Port | Description                   |
+| ----------- | ---- | ----------------------------- |
+| Shadowsocks | 443  | Encrypted, looks like HTTPS   |
+| HTTP        | 80   | Standard HTTP proxy           |
+| SOCKS5      | 1080 | General purpose, supports UDP |
 
-# On exit server
-./xcp.sh setup gateway
+All protocols share the same username/password.
 
-# On entry server  
-./xcp.sh setup edge
-```
+## Requirements
 
-## Commands
+- Debian/Ubuntu with root access
+- GATEWAY server with unrestricted internet
+- EDGE server accessible to clients
 
-```
-setup gateway|edge    Setup server
-start|stop|restart    Control service
-status                Show status
-user ls|add|rm        Manage users
-stats                 Traffic statistics
-logs [-f] [n]         View logs
-test                  Test connection
-config ls|set         Configuration
-update                Update Xray
-uninstall             Remove Xray
-```
+## Files
+
+| File   | Path                          |
+| ------ | ----------------------------- |
+| Binary | `/usr/local/xray/xray`        |
+| Config | `/usr/local/xray/config.json` |
+| Logs   | `/var/log/xray/`              |
+| Cache  | `/tmp/xray-cache/`            |
+
+## Dependencies
+
+**Required:** `curl` `unzip` `jq`
+
+**Optional:** `qrencode` (QR codes), `speedtest-cli` (speed test)

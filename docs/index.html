@@ -3,21 +3,40 @@
     <head>
         <meta charset="UTF-8" />
         <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-        <title>Xray Chain Proxy - Multi-protocol Chain Proxy for Censorship Circumvention</title>
-        <meta name="description" content="Chain proxy setup with Shadowsocks, HTTP, and SOCKS5 protocols for bypassing internet censorship" />
-        <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css" />
+        <title>Xray Chain Proxy</title>
+        <meta
+            name="description"
+            content="Chain proxy setup with Shadowsocks, HTTP, and SOCKS5 protocols for bypassing internet censorship"
+        />
+        <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/docsify-themeable@0/dist/css/theme-simple-dark.css"
+        />
         <style>
             :root {
                 --theme-color: #42b883;
+                --base-background-color: #1e1e1e;
+                --cover-background-color: #1e1e1e;
+                --sidebar-background: #252526;
+                --sidebar-nav-link-color--active: #42b883;
+                --sidebar-nav-link-border-color--active: #42b883;
+                --link-color: #42b883;
+                --blockquote-border-color: #42b883;
+                --code-inline-background: #333;
+                --code-theme-background: #1e1e1e;
             }
             .sidebar-nav > ul > li > a {
-                font-weight: bold;
+                font-weight: 600;
             }
             .markdown-section code {
                 border-radius: 4px;
             }
             .markdown-section pre {
                 border-radius: 8px;
+            }
+            .markdown-section table {
+                display: table;
+                width: 100%;
             }
         </style>
     </head>
@@ -29,11 +48,19 @@
                 repo: "dalirnet/xray-chain-proxy",
                 autoHeader: true,
                 loadSidebar: true,
+                loadNavbar: true,
                 subMaxLevel: 2,
                 auto2top: true,
+                alias: {
+                    "/changelog":
+                        "https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/CHANGELOG.md",
+                    "/fa/changelog":
+                        "https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/CHANGELOG.md",
+                },
             };
         </script>
         <script src="https://cdn.jsdelivr.net/npm/docsify@4"></script>
+        <script src="https://cdn.jsdelivr.net/npm/docsify-themeable@0"></script>
         <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
     </body>

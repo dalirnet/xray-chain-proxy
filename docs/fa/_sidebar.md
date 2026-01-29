@@ -1,0 +1,7 @@
+- [خانه](/fa/)
+- [شروع کار](/fa/getting-started.md)
+- [ارائه‌دهندگان](/fa/providers.md)
+- [کلاینت‌ها](/fa/clients.md)
+- [دستورات](/fa/commands.md)
+- [پیشرفته](/fa/advanced.md)
+- [تغییرات](/fa/changelog.md)

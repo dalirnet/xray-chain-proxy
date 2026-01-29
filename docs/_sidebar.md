@@ -1,2 +1,7 @@
 - [Home](/)
 - [Getting Started](getting-started.md)
+- [Providers](providers.md)
+- [Clients](clients.md)
+- [Commands](commands.md)
+- [Advanced](advanced.md)
+- [Changelog](changelog.md)
