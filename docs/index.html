@@ -23,6 +23,12 @@
                 display: table;
                 width: 100%;
             }
+            /* Fix sidebar toggle position LTR */
+            .sidebar-toggle {
+                width: 300px;
+                padding: 10px;
+                text-align: right;
+            }
             /* RTL support for Persian */
             body.rtl {
                 direction: rtl;
@@ -100,7 +106,10 @@
             }
             body.rtl .sidebar-toggle {
                 right: auto;
-                left: 10px;
+                left: 0;
+                width: 300px;
+                padding: 10px;
+                text-align: left;
             }
             /* Main content RTL */
             body.rtl main {
