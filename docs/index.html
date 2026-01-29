@@ -38,6 +38,35 @@
                 display: table;
                 width: 100%;
             }
+            /* RTL support for Persian */
+            body.rtl .sidebar,
+            body.rtl .sidebar-nav,
+            body.rtl .markdown-section {
+                direction: rtl;
+                text-align: right;
+            }
+            body.rtl .sidebar {
+                right: 0;
+                left: auto;
+            }
+            body.rtl .sidebar-toggle {
+                right: auto;
+                left: 0;
+            }
+            body.rtl .content {
+                margin-right: 300px;
+                margin-left: 0;
+            }
+            body.rtl .markdown-section pre,
+            body.rtl .markdown-section code {
+                direction: ltr;
+                text-align: left;
+            }
+            @media (max-width: 768px) {
+                body.rtl .content {
+                    margin-right: 0;
+                }
+            }
         </style>
     </head>
     <body>
@@ -63,5 +92,16 @@
         <script src="https://cdn.jsdelivr.net/npm/docsify-themeable@0"></script>
         <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
+        <script>
+            // RTL support for Persian
+            (function () {
+                function updateDirection() {
+                    var isFa = location.hash.indexOf("#/fa") === 0;
+                    document.body.classList.toggle("rtl", isFa);
+                }
+                window.addEventListener("hashchange", updateDirection);
+                window.addEventListener("load", updateDirection);
+            })();
+        </script>
     </body>
 </html>
