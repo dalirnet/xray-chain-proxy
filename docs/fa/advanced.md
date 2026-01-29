@@ -4,13 +4,7 @@
 
 ### EDGE های موازی
 
-چند نقطه ورود به یک GATEWAY:
-
-```
-Client A --> EDGE 1 --\
-                       --> GATEWAY --> Internet
-Client B --> EDGE 2 --/
-```
+چند نقطه ورود به یک GATEWAY.
 
 کاربردها:
 
@@ -22,11 +16,7 @@ Client B --> EDGE 2 --/
 
 ### EDGE های زنجیره‌ای
 
-چند هاپ برای حریم خصوصی بیشتر:
-
-```
-Client --> EDGE 1 --> EDGE 2 --> GATEWAY --> Internet
-```
+چند هاپ برای حریم خصوصی بیشتر.
 
 کاربردها:
 

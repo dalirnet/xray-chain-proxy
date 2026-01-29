@@ -10,6 +10,7 @@
         />
         <link rel="stylesheet" href="vue.css" />
         <style>
+            /* General enhancements */
             .sidebar-nav > ul > li > a {
                 font-weight: 600;
             }
@@ -23,166 +24,236 @@
                 display: table;
                 width: 100%;
             }
-            /* Fix sidebar toggle position LTR */
+
+            /* Move sidebar toggle to top outside sidebar */
             .sidebar-toggle {
-                width: 300px;
-                padding: 10px;
-                text-align: right;
+                bottom: auto;
+                top: 5px;
+                left: 300px;
+                width: auto;
+                background-color: transparent;
             }
-            /* RTL support for Persian */
+
+            /* ===================== RTL Styles ===================== */
             body.rtl {
                 direction: rtl;
             }
-            /* Content RTL */
+
+            /* 1. .app-nav: margin: 25px 60px 0 0; right: 0; text-align: right;
+               RTL: margin: 25px 0 0 60px; left: 0; right: auto; text-align: left; */
+            body.rtl .app-nav {
+                margin: 25px 0 0 60px;
+                right: auto;
+                left: 0;
+                text-align: left;
+            }
+
+            /* 2. .app-nav li ul: right: -15px; text-align: left;
+               RTL: left: -15px; right: auto; text-align: right; */
+            body.rtl .app-nav li ul {
+                right: auto;
+                left: -15px;
+                text-align: right;
+            }
+
+            /* 3. .github-corner: right: 0;
+               RTL: left: 0; right: auto; + flip SVG */
+            body.rtl .github-corner {
+                right: auto;
+                left: 0;
+            }
+            body.rtl .github-corner svg {
+                transform: scaleX(-1);
+            }
+
+            /* 4. .sidebar: border-right: 1px solid; left: 0;
+               RTL: border-left: 1px solid; border-right: none; right: 0; left: auto; */
+            body.rtl .sidebar {
+                border-right: none;
+                border-left: 1px solid rgba(0, 0, 0, 0.07);
+                left: auto;
+                right: 0;
+            }
+
+            /* 5. .sidebar ul: margin: 0 0 0 15px;
+               RTL: margin: 0 15px 0 0; */
+            body.rtl .sidebar ul {
+                margin: 0 15px 0 0;
+            }
+
+            /* 6. .sidebar ul li ul: padding-left: 20px;
+               RTL: padding-left: 0; padding-right: 20px; */
+            body.rtl .sidebar ul li ul {
+                padding-left: 0;
+                padding-right: 20px;
+            }
+
+            /* 7. .sidebar ul li.active > a: border-right: 2px solid;
+               RTL: border-right: none; border-left: 2px solid; */
+            body.rtl .sidebar ul li.active > a {
+                border-right: none;
+                border-left: 2px solid;
+                border-left-color: var(--theme-color, #42b983);
+            }
+
+            /* 8. .sidebar-toggle: left: 300px;
+               RTL: left: auto; right: 300px; */
+            body.rtl .sidebar-toggle {
+                left: auto;
+                right: 300px;
+            }
+
+            /* 9. .content: left: 300px;
+               RTL: left: 0; right: 300px; */
+            body.rtl .content {
+                left: 0;
+                right: 300px;
+            }
+
+            /* 10. .markdown-section ol, ul: padding-left: 1.5rem;
+                RTL: padding-left: 0; padding-right: 1.5rem; */
             body.rtl .markdown-section {
                 direction: rtl;
                 text-align: right;
             }
-            body.rtl .markdown-section h1,
-            body.rtl .markdown-section h2,
-            body.rtl .markdown-section h3,
-            body.rtl .markdown-section h4,
-            body.rtl .markdown-section h5,
-            body.rtl .markdown-section h6,
-            body.rtl .markdown-section p,
-            body.rtl .markdown-section li,
-            body.rtl .markdown-section blockquote {
-                direction: rtl;
-                text-align: right;
-            }
-            body.rtl .markdown-section ul,
-            body.rtl .markdown-section ol {
-                padding-right: 1.5em;
+            body.rtl .markdown-section ol,
+            body.rtl .markdown-section ul {
                 padding-left: 0;
+                padding-right: 1.5rem;
             }
+
+            /* 11. .markdown-section blockquote: border-left: 4px solid; padding-left: 20px;
+                RTL: border-left: none; border-right: 4px solid; padding-left: 0; padding-right: 20px; */
             body.rtl .markdown-section blockquote {
-                border-right: 4px solid #42b983;
                 border-left: none;
-                padding-right: 1em;
+                border-right: 4px solid;
+                border-right-color: var(--theme-color, #42b983);
                 padding-left: 0;
-                margin-right: 0;
-                margin-left: 1em;
-            }
-            /* Sidebar RTL */
-            body.rtl .sidebar {
-                right: 0;
-                left: auto;
-                border-right: none;
-                border-left: 1px solid rgba(0, 0, 0, 0.07);
-                text-align: right;
-                padding-top: 60px;
-            }
-            body.rtl .sidebar > h1,
-            body.rtl .sidebar > h1 a {
-                text-align: right;
-            }
-            body.rtl .sidebar-nav {
-                direction: rtl;
-                text-align: right;
-            }
-            body.rtl .sidebar-nav ul {
-                padding-right: 0;
-                padding-left: 0;
-                margin-right: 0;
-            }
-            body.rtl .sidebar-nav > ul > li > ul {
                 padding-right: 20px;
-                padding-left: 0;
             }
-            body.rtl .sidebar-nav li {
-                direction: rtl;
-                text-align: right;
+
+            /* 12. .markdown-section blockquote p: margin-left: 0;
+                RTL: margin-left: auto; margin-right: 0; */
+            body.rtl .markdown-section blockquote p {
+                margin-left: auto;
+                margin-right: 0;
             }
-            body.rtl .sidebar-nav li a {
-                display: block;
-                text-align: right;
-            }
-            body.rtl .sidebar-nav li.active > a,
-            body.rtl .sidebar-nav li a.active {
-                border-right: 2px solid #42b983;
+
+            /* 13. .markdown-section p.tip: border-left: 4px solid; padding: 12px 24px 12px 30px;
+                RTL: border-left: none; border-right: 4px solid; padding: 12px 30px 12px 24px; */
+            body.rtl .markdown-section p.tip {
                 border-left: none;
-                padding-right: 10px;
-                padding-left: 0;
+                border-right: 4px solid #f66;
+                border-radius: 2px 0 0 2px;
+                padding: 12px 30px 12px 24px;
             }
-            body.rtl .sidebar-toggle {
+
+            /* 14. .markdown-section p.tip:before: left: -12px;
+                RTL: left: auto; right: -12px; */
+            body.rtl .markdown-section p.tip:before {
+                left: auto;
+                right: -12px;
+            }
+
+            /* 15. .markdown-section pre:after: right: 0; text-align: right;
+                RTL: right: auto; left: 0; text-align: left; */
+            body.rtl .markdown-section pre:after,
+            body.rtl .markdown-section output:after {
                 right: auto;
                 left: 0;
-                width: 300px;
-                padding: 10px;
                 text-align: left;
             }
-            /* Main content RTL */
-            body.rtl main {
-                margin-right: 300px;
-                margin-left: 0;
+
+            /* 16. .app-sub-sidebar li:before: padding-right: 4px; float: left;
+                RTL: padding-right: 0; padding-left: 4px; float: right; */
+            body.rtl .app-sub-sidebar li:before {
+                padding-right: 0;
+                padding-left: 4px;
+                float: right;
             }
-            body.rtl .content {
-                margin-right: 0;
-                margin-left: 0;
+
+            /* Code blocks stay LTR */
+            body.rtl .markdown-section pre {
+                direction: ltr !important;
+                text-align: left !important;
             }
-            /* Code stays LTR */
-            body.rtl .markdown-section pre,
+            body.rtl .markdown-section pre * {
+                direction: ltr !important;
+                text-align: left !important;
+            }
             body.rtl .markdown-section code {
-                direction: ltr;
-                text-align: left;
+                direction: ltr !important;
             }
-            /* Tables RTL */
+
+            /* Tables RTL but code inside stays LTR */
             body.rtl .markdown-section table {
                 direction: rtl;
             }
-            body.rtl .markdown-section table th,
-            body.rtl .markdown-section table td {
+            body.rtl .markdown-section th,
+            body.rtl .markdown-section td {
                 text-align: right;
             }
             body.rtl .markdown-section table code {
                 direction: ltr;
             }
-            /* Navbar RTL */
-            body.rtl nav.app-nav {
-                right: auto;
-                left: 60px;
-                text-align: left;
-            }
-            body.rtl nav.app-nav ul {
-                direction: ltr;
-                text-align: left;
-            }
-            body.rtl nav.app-nav li {
-                display: inline-block;
-                margin: 0 8px;
-            }
-            /* GitHub corner RTL */
-            body.rtl .github-corner {
+
+            /* Sidebar toggle when closed */
+            body.close .sidebar-toggle {
                 left: 0;
-                right: auto;
             }
-            body.rtl .github-corner svg {
-                transform: scaleX(-1);
-            }
-            /* Mobile RTL */
-            @media screen and (max-width: 768px) {
-                body.rtl main {
-                    margin-right: 0;
-                }
-                body.rtl .sidebar {
-                    right: 0;
-                    left: auto;
-                    transform: translateX(100%);
-                }
-                body.rtl .sidebar-toggle {
-                    left: 10px;
-                    right: auto;
-                }
-                body.rtl nav.app-nav {
-                    left: 50px;
-                    right: auto;
-                }
-            }
+
+            /* 17. body.close .sidebar: transform: translateX(-300px);
+                RTL: transform: translateX(300px); */
             body.rtl.close .sidebar {
-                transform: translateX(100%);
+                transform: translateX(300px);
             }
-            body.rtl:not(.close) .sidebar {
-                transform: translateX(0);
+            body.rtl.close .sidebar-toggle {
+                right: 0;
+            }
+
+            /* 18. body.close .content: left: 0;
+                RTL: right: 0; */
+            body.rtl.close .content {
+                right: 0;
+            }
+
+            /* ===================== Mobile RTL ===================== */
+            @media screen and (max-width: 768px) {
+                /* 19. .sidebar: left: -300px;
+                    RTL: left: auto; right: -300px; */
+                body.rtl .sidebar {
+                    left: auto;
+                    right: -300px;
+                }
+
+                /* .content already static in mobile, reset right */
+                body.rtl .content {
+                    right: 0;
+                }
+
+                /* 20. .sidebar-toggle: padding: 30px 30px 10px 10px;
+                    RTL: padding: 30px 10px 10px 30px; */
+                body.rtl .sidebar-toggle {
+                    padding: 30px 10px 10px 30px;
+                }
+
+                /* 21. body.close .sidebar: transform: translateX(300px);
+                    RTL: transform: translateX(-300px); */
+                body.rtl.close .sidebar {
+                    transform: translateX(-300px);
+                }
+
+                /* 22. body.close .content: transform: translateX(300px);
+                    RTL: transform: translateX(-300px); */
+                body.rtl.close .content {
+                    transform: translateX(-300px);
+                }
+
+                /* body.close .sidebar-toggle: padding: 10px;
+                   Same for RTL */
+                body.rtl.close .sidebar-toggle {
+                    padding: 10px;
+                }
             }
         </style>
     </head>
@@ -191,7 +262,6 @@
         <script>
             window.$docsify = {
                 name: "Xray Chain Proxy",
-                repo: "dalirnet/xray-chain-proxy",
                 autoHeader: true,
                 loadSidebar: true,
                 loadNavbar: true,
