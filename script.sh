@@ -33,17 +33,27 @@
 
 set -euo pipefail
 
-# Constants
-readonly VERSION="1.0.0"
+# Script info
+readonly VERSION="2.0.0"
 readonly SCRIPT_NAME="$(basename "$0")"
+
+# Directories and files
 readonly XRAY_DIR="/usr/local/xray"
 readonly XRAY_BIN="${XRAY_DIR}/xray"
 readonly XRAY_CONFIG="${XRAY_DIR}/config.json"
 readonly XRAY_SERVICE="/etc/systemd/system/xray.service"
 readonly LOG_DIR="/var/log/xray"
-readonly DEFAULT_PORT=80
+readonly CACHE_DIR="/tmp/xray-cache"
+
+# Default ports
+readonly DEFAULT_SS_PORT=443
+readonly DEFAULT_HTTP_PORT=80
+readonly DEFAULT_SOCKS_PORT=1080
+
+# Xray settings
 readonly ENCRYPTION_METHOD="aes-256-gcm"
-readonly XRAY_API_URL="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
+readonly XRAY_FALLBACK_VERSION="v24.12.18"
+readonly XRAY_RELEASE_URL="https://api.github.com/repos/XTLS/Xray-core/releases/latest"
 
 # Terminal colors (auto-detect support)
 if [[ -t 1 ]] && command -v tput &>/dev/null && [[ $(tput colors 2>/dev/null || echo 0) -ge 8 ]]; then
@@ -57,12 +67,15 @@ else
     readonly RED='' GREEN='' YELLOW='' CYAN='' BOLD='' NC=''
 fi
 
-# Logging functions
+# --- Logging ---
+
 log_info()    { echo -e "${CYAN}[INFO]${NC} $1"; }
 log_success() { echo -e "${GREEN}[OK]${NC} $1"; }
 log_warn()    { echo -e "${YELLOW}[WARN]${NC} $1" >&2; }
 log_error()   { echo -e "${RED}[ERROR]${NC} $1" >&2; exit "${2:-1}"; }
 log_step()    { echo -e "\n${BOLD}>>> $1${NC}"; }
+
+# --- Validation ---
 
 # Check if running as root
 check_root() {
@@ -99,11 +112,39 @@ validate_address() {
     return 1
 }
 
+# --- Utilities ---
+
 # Generate random password
 generate_password() {
     local len="${1:-16}"
     openssl rand -base64 32 2>/dev/null | tr -dc 'a-zA-Z0-9' | head -c "$len" || \
     head -c 32 /dev/urandom | base64 | tr -dc 'a-zA-Z0-9' | head -c "$len"
+}
+
+# Download with retry (prompts if file exists)
+download_with_retry() {
+    local url="$1"
+    local output="$2"
+    local retries="${3:-3}"
+    local delay="${4:-5}"
+
+    # Prompt if file already exists and is not empty
+    if [[ -f "$output" && -s "$output" ]]; then
+        read -rp "File exists: $(basename "$output"). Re-download? [y/N]: " ans
+        [[ ! "$ans" =~ ^[Yy]$ ]] && return 0
+        rm -f "$output"
+    fi
+
+    for ((i=1; i<=retries; i++)); do
+        if curl -L --progress-bar --fail -o "$output" "$url" \
+            -w '\n  Speed: %{speed_download}B/s | Time: %{time_total}s | Size: %{size_download}B\n' 2>&1; then
+            return 0
+        fi
+        # Remove failed partial download
+        rm -f "$output"
+        [[ $i -lt $retries ]] && log_warn "Download failed, retry $i/$retries in ${delay}s..." && sleep "$delay"
+    done
+    return 1
 }
 
 # URL-safe base64 encoding
@@ -138,6 +179,8 @@ format_bytes() {
     ((b < 1073741824)) && echo "$((b / 1048576)) MB" && return
     echo "$((b / 1073741824)) GB"
 }
+
+# --- Installation ---
 
 # Check and install dependencies
 check_dependencies() {
@@ -180,24 +223,30 @@ install_xray() {
     fi
 
     local arch=$(get_arch)
-    local tmp=$(mktemp -d)
-    trap "rm -rf '$tmp'" EXIT
+    mkdir -p "$CACHE_DIR"
 
     log_info "Fetching latest version..."
-    local version=$(curl -s --connect-timeout 10 "$XRAY_API_URL" 2>/dev/null | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/' || echo "v24.12.18")
+    local version=$(curl -s --connect-timeout 10 "$XRAY_RELEASE_URL" 2>/dev/null | jq -r '.tag_name // empty' || echo "$XRAY_FALLBACK_VERSION")
+    [[ -z "$version" ]] && version="$XRAY_FALLBACK_VERSION"
     log_info "Version: $version"
 
+    local zip_file="$CACHE_DIR/Xray-linux-${arch}-${version}.zip"
+
     log_info "Downloading..."
-    curl -L --progress-bar -o "$tmp/xray.zip" \
-        "https://github.com/XTLS/Xray-core/releases/download/${version}/Xray-linux-${arch}.zip" || log_error "Download failed"
+    download_with_retry "https://github.com/XTLS/Xray-core/releases/download/${version}/Xray-linux-${arch}.zip" "$zip_file" || log_error "Download failed after retries"
 
     mkdir -p "$XRAY_DIR" "$LOG_DIR"
-    unzip -o -q "$tmp/xray.zip" -d "$XRAY_DIR" || log_error "Extract failed"
+    unzip -o -q "$zip_file" -d "$XRAY_DIR" || log_error "Extract failed"
     chmod +x "$XRAY_BIN"
 
-    # Download geo data
-    curl -sL -o "$XRAY_DIR/geoip.dat" "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" 2>/dev/null || true
-    curl -sL -o "$XRAY_DIR/geosite.dat" "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" 2>/dev/null || true
+    read -rp "Download geo data (geoip.dat, geosite.dat)? [Y/n]: " ans
+    if [[ ! "$ans" =~ ^[Nn]$ ]]; then
+        log_info "Downloading geo data..."
+        download_with_retry "https://github.com/v2fly/geoip/releases/latest/download/geoip.dat" "$XRAY_DIR/geoip.dat" || true
+        download_with_retry "https://github.com/v2fly/domain-list-community/releases/latest/download/dlc.dat" "$XRAY_DIR/geosite.dat" || true
+    else
+        log_info "Skipping geo data download"
+    fi
 
     # Create systemd service
     cat > "$XRAY_SERVICE" << 'EOF'
@@ -226,9 +275,6 @@ EOF
     systemctl daemon-reload
     systemctl enable xray --quiet 2>/dev/null || true
 
-    rm -rf "$tmp"
-    trap - EXIT
-
     log_success "Xray installed: $version"
 }
 
@@ -249,6 +295,8 @@ configure_firewall() {
         log_info "Firewall: port $port opened"
     fi
 }
+
+# --- Prompts ---
 
 # Prompt for port number
 prompt_port() {
@@ -293,9 +341,13 @@ prompt_password() {
     fi
 }
 
+# --- Config generators ---
+
 # Generate GATEWAY configuration
 gen_gateway_config() {
-    local port="$1" clients="$2"
+    local ss_port="$1" ss_clients="$2" http_port="$3" socks_port="$4"
+    # Convert ss clients to http/socks format: email->user, password->pass
+    local http_clients=$(echo "$ss_clients" | jq '[.[] | {user: .email, pass: .password}]')
 
     cat << EOF
 {
@@ -339,11 +391,38 @@ gen_gateway_config() {
     },
     {
       "tag": "ss-in",
-      "port": ${port},
+      "port": ${ss_port},
       "protocol": "shadowsocks",
       "settings": {
-        "clients": ${clients},
+        "clients": ${ss_clients},
         "network": "tcp,udp"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    },
+    {
+      "tag": "http-in",
+      "port": ${http_port},
+      "protocol": "http",
+      "settings": {
+        "accounts": ${http_clients},
+        "allowTransparent": false
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    },
+    {
+      "tag": "socks-in",
+      "port": ${socks_port},
+      "protocol": "socks",
+      "settings": {
+        "auth": "password",
+        "accounts": ${http_clients},
+        "udp": true
       },
       "sniffing": {
         "enabled": true,
@@ -381,7 +460,9 @@ EOF
 
 # Generate EDGE configuration
 gen_edge_config() {
-    local port="$1" clients="$2" gw_ip="$3" gw_port="$4" gw_pass="$5"
+    local ss_port="$1" ss_clients="$2" gw_ip="$3" gw_port="$4" gw_pass="$5" http_port="$6" socks_port="$7"
+    # Convert ss clients to http/socks format: email->user, password->pass
+    local http_clients=$(echo "$ss_clients" | jq '[.[] | {user: .email, pass: .password}]')
 
     cat << EOF
 {
@@ -434,11 +515,38 @@ gen_edge_config() {
     },
     {
       "tag": "ss-in",
-      "port": ${port},
+      "port": ${ss_port},
       "protocol": "shadowsocks",
       "settings": {
-        "clients": ${clients},
+        "clients": ${ss_clients},
         "network": "tcp,udp"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    },
+    {
+      "tag": "http-in",
+      "port": ${http_port},
+      "protocol": "http",
+      "settings": {
+        "accounts": ${http_clients},
+        "allowTransparent": false
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    },
+    {
+      "tag": "socks-in",
+      "port": ${socks_port},
+      "protocol": "socks",
+      "settings": {
+        "auth": "password",
+        "accounts": ${http_clients},
+        "udp": true
       },
       "sniffing": {
         "enabled": true,
@@ -475,7 +583,7 @@ gen_edge_config() {
       },
       {
         "type": "field",
-        "inboundTag": ["socks-local", "ss-in"],
+        "inboundTag": ["socks-local", "ss-in", "http-in", "socks-in"],
         "outboundTag": "proxy"
       }
     ]
@@ -490,6 +598,8 @@ gen_ss_uri() {
     echo "ss://$(base64_urlsafe "${method}:${pass}")@${server}:${port}#${name:-Proxy}"
 }
 
+# --- Setup ---
+
 # Setup GATEWAY server
 setup_gateway() {
     echo -e "\n${BOLD}GATEWAY Setup${NC} (Exit Node)\n"
@@ -499,18 +609,22 @@ setup_gateway() {
     check_dependencies
     install_xray
 
-    log_step "Configure"
+    log_step "Configure Ports"
 
-    local PORT
-    prompt_port "Listen port" "$DEFAULT_PORT" PORT
+    local SS_PORT HTTP_PORT SOCKS_PORT
+    prompt_port "Shadowsocks port" "$DEFAULT_SS_PORT" SS_PORT
+    prompt_port "HTTP proxy port" "$DEFAULT_HTTP_PORT" HTTP_PORT
+    prompt_port "SOCKS5 proxy port" "$DEFAULT_SOCKS_PORT" SOCKS_PORT
 
     # Create initial edge account
     local EDGE_PASS=$(generate_password 16)
     local EDGE_CLIENT="[{\"email\":\"edge\",\"password\":\"${EDGE_PASS}\",\"method\":\"${ENCRYPTION_METHOD}\"}]"
 
-    gen_gateway_config "$PORT" "$EDGE_CLIENT" > "$XRAY_CONFIG"
+    gen_gateway_config "$SS_PORT" "$EDGE_CLIENT" "$HTTP_PORT" "$SOCKS_PORT" > "$XRAY_CONFIG"
     validate_config
-    configure_firewall "$PORT"
+    configure_firewall "$SS_PORT"
+    configure_firewall "$HTTP_PORT"
+    configure_firewall "$SOCKS_PORT"
 
     systemctl restart xray
     sleep 2
@@ -520,9 +634,11 @@ setup_gateway() {
 
     echo -e "\n${GREEN}GATEWAY Ready!${NC}"
     echo -e "\n${BOLD}Use on EDGE server:${NC}"
-    echo -e "  IP:       ${YELLOW}$IP${NC}"
-    echo -e "  Port:     ${YELLOW}$PORT${NC}"
-    echo -e "  Password: ${YELLOW}$EDGE_PASS${NC}\n"
+    echo -e "  IP:         ${YELLOW}$IP${NC}"
+    echo -e "  SS Port:    ${YELLOW}$SS_PORT${NC}"
+    echo -e "  HTTP Port:  ${YELLOW}$HTTP_PORT${NC}"
+    echo -e "  SOCKS Port: ${YELLOW}$SOCKS_PORT${NC}"
+    echo -e "  Password:   ${YELLOW}$EDGE_PASS${NC}\n"
 }
 
 # Setup EDGE server
@@ -538,21 +654,25 @@ setup_edge() {
 
     local GW_IP GW_PORT GW_PASS
     prompt_address "Gateway IP" GW_IP
-    prompt_port "Gateway port" "$DEFAULT_PORT" GW_PORT
+    prompt_port "Gateway port" "$DEFAULT_SS_PORT" GW_PORT
     prompt_password "Gateway password" "false" GW_PASS
 
     log_step "Edge Settings"
 
-    local PORT
-    prompt_port "Listen port" "$DEFAULT_PORT" PORT
+    local SS_PORT HTTP_PORT SOCKS_PORT
+    prompt_port "Shadowsocks port" "$DEFAULT_SS_PORT" SS_PORT
+    prompt_port "HTTP proxy port" "$DEFAULT_HTTP_PORT" HTTP_PORT
+    prompt_port "SOCKS5 proxy port" "$DEFAULT_SOCKS_PORT" SOCKS_PORT
 
     # Create initial edge account
     local EDGE_PASS=$(generate_password 16)
     local EDGE_CLIENT="[{\"email\":\"edge\",\"password\":\"${EDGE_PASS}\",\"method\":\"${ENCRYPTION_METHOD}\"}]"
 
-    gen_edge_config "$PORT" "$EDGE_CLIENT" "$GW_IP" "$GW_PORT" "$GW_PASS" > "$XRAY_CONFIG"
+    gen_edge_config "$SS_PORT" "$EDGE_CLIENT" "$GW_IP" "$GW_PORT" "$GW_PASS" "$HTTP_PORT" "$SOCKS_PORT" > "$XRAY_CONFIG"
     validate_config
-    configure_firewall "$PORT"
+    configure_firewall "$SS_PORT"
+    configure_firewall "$HTTP_PORT"
+    configure_firewall "$SOCKS_PORT"
 
     systemctl restart xray
     sleep 2
@@ -561,11 +681,14 @@ setup_edge() {
     local IP=$(get_public_ip)
 
     echo -e "\n${GREEN}EDGE Ready!${NC}"
-    echo -e "\n${BOLD}Chain:${NC} Client -> $IP:$PORT -> $GW_IP:$GW_PORT -> Internet"
-    echo -e "\n${BOLD}Use on Xray client:${NC}"
-    echo -e "  IP:       ${YELLOW}$IP${NC}"
-    echo -e "  Port:     ${YELLOW}$PORT${NC}"
-    echo -e "  Password: ${YELLOW}$EDGE_PASS${NC}\n"
+    echo -e "\n${BOLD}Chain:${NC} Client -> $IP -> $GW_IP:$GW_PORT -> Internet"
+    echo -e "\n${BOLD}Connection Details:${NC}"
+    echo -e "  IP:         ${YELLOW}$IP${NC}"
+    echo -e "  SS Port:    ${YELLOW}$SS_PORT${NC}"
+    echo -e "  HTTP Port:  ${YELLOW}$HTTP_PORT${NC}"
+    echo -e "  SOCKS Port: ${YELLOW}$SOCKS_PORT${NC}"
+    echo -e "  Username:   ${YELLOW}edge${NC}"
+    echo -e "  Password:   ${YELLOW}$EDGE_PASS${NC}\n"
 }
 
 # List all users
@@ -574,9 +697,13 @@ user_ls() {
     jq -e '.inbounds[] | select(.tag == "ss-in") | .settings.clients' "$XRAY_CONFIG" &>/dev/null || log_error "No accounts configured"
 
     local IP=$(get_public_ip)
-    local PORT=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local SS_PORT=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local HTTP_PORT=$(jq -r '.inbounds[] | select(.tag == "http-in") | .port' "$XRAY_CONFIG")
+    local SOCKS_PORT=$(jq -r '.inbounds[] | select(.tag == "socks-in") | .port' "$XRAY_CONFIG")
     local clients=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .settings.clients[] | "\(.email)|\(.password)"' "$XRAY_CONFIG" 2>/dev/null)
 
+    echo -e "\n${BOLD}Server:${NC} $IP"
+    echo -e "${BOLD}Ports:${NC} SS:${SS_PORT} | HTTP:${HTTP_PORT} | SOCKS5:${SOCKS_PORT}"
     echo -e "\n${BOLD}Accounts:${NC}\n"
 
     if [[ -z "$clients" ]]; then
@@ -584,10 +711,10 @@ user_ls() {
     else
         local i=1
         while IFS='|' read -r email pass; do
-            local uri=$(gen_ss_uri "$ENCRYPTION_METHOD" "$pass" "$IP" "$PORT" "$email")
+            local uri=$(gen_ss_uri "$ENCRYPTION_METHOD" "$pass" "$IP" "$SS_PORT" "$email")
             echo -e "${CYAN}$i) $email${NC}"
             echo -e "   Password: ${YELLOW}$pass${NC}"
-            echo "   URI: $uri"
+            echo "   SS URI: $uri"
             echo
             ((i++))
         done <<< "$clients"
@@ -607,11 +734,17 @@ user_add() {
 
     prompt_password "Password" "true" PASS
 
-    local PORT=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local SS_PORT=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local HTTP_PORT=$(jq -r '.inbounds[] | select(.tag == "http-in") | .port' "$XRAY_CONFIG")
+    local SOCKS_PORT=$(jq -r '.inbounds[] | select(.tag == "socks-in") | .port' "$XRAY_CONFIG")
     local TMP=$(mktemp)
 
     jq --arg e "$EMAIL" --arg p "$PASS" --arg m "$ENCRYPTION_METHOD" \
-        '.inbounds |= map(if .tag == "ss-in" then .settings.clients += [{"email":$e,"password":$p,"method":$m}] else . end)' \
+        '.inbounds |= map(
+            if .tag == "ss-in" then .settings.clients += [{"email":$e,"password":$p,"method":$m}]
+            elif .tag == "http-in" or .tag == "socks-in" then .settings.accounts += [{"user":$e,"pass":$p}]
+            else . end
+        )' \
         "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
 
     validate_config
@@ -619,17 +752,20 @@ user_add() {
     sleep 1
 
     local IP=$(get_public_ip)
-    local URI=$(gen_ss_uri "$ENCRYPTION_METHOD" "$PASS" "$IP" "$PORT" "$EMAIL")
+    local URI=$(gen_ss_uri "$ENCRYPTION_METHOD" "$PASS" "$IP" "$SS_PORT" "$EMAIL")
 
     echo -e "\n${GREEN}Account '$EMAIL' Added${NC}"
-    echo -e "  IP:       ${YELLOW}$IP${NC}"
-    echo -e "  Port:     ${YELLOW}$PORT${NC}"
-    echo -e "  Password: ${YELLOW}$PASS${NC}\n"
+    echo -e "  IP:         ${YELLOW}$IP${NC}"
+    echo -e "  SS Port:    ${YELLOW}$SS_PORT${NC}"
+    echo -e "  HTTP Port:  ${YELLOW}$HTTP_PORT${NC}"
+    echo -e "  SOCKS Port: ${YELLOW}$SOCKS_PORT${NC}"
+    echo -e "  Username:   ${YELLOW}$EMAIL${NC}"
+    echo -e "  Password:   ${YELLOW}$PASS${NC}\n"
 
     if command -v qrencode &>/dev/null; then
         qrencode -t ANSIUTF8 "$URI"
     fi
-    echo "$URI"
+    echo "SS URI: $URI"
 }
 
 # Remove user
@@ -646,7 +782,11 @@ user_rm() {
     local TMP=$(mktemp)
 
     jq --arg e "$EMAIL" \
-        '.inbounds |= map(if .tag == "ss-in" then .settings.clients |= map(select(.email != $e)) else . end)' \
+        '.inbounds |= map(
+            if .tag == "ss-in" then .settings.clients |= map(select(.email != $e))
+            elif .tag == "http-in" or .tag == "socks-in" then .settings.accounts |= map(select(.user != $e))
+            else . end
+        )' \
         "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
 
     validate_config
@@ -731,26 +871,39 @@ config_port() {
     check_root
     [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
 
-    local current=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
-    echo -e "\n${BOLD}Listen Port${NC}\n"
-    echo -e "Current: ${YELLOW}$current${NC}\n"
+    local ss_current=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local http_current=$(jq -r '.inbounds[] | select(.tag == "http-in") | .port' "$XRAY_CONFIG")
+    local socks_current=$(jq -r '.inbounds[] | select(.tag == "socks-in") | .port' "$XRAY_CONFIG")
 
-    local PORT
-    prompt_port "New port" "$current" PORT
+    echo -e "\n${BOLD}Listen Ports${NC}\n"
+    echo -e "Current: SS:${YELLOW}$ss_current${NC} | HTTP:${YELLOW}$http_current${NC} | SOCKS5:${YELLOW}$socks_current${NC}\n"
 
-    if [[ "$PORT" == "$current" ]]; then
-        log_info "Port unchanged"
+    local SS_PORT HTTP_PORT SOCKS_PORT
+    prompt_port "Shadowsocks port" "$ss_current" SS_PORT
+    prompt_port "HTTP proxy port" "$http_current" HTTP_PORT
+    prompt_port "SOCKS5 proxy port" "$socks_current" SOCKS_PORT
+
+    if [[ "$SS_PORT" == "$ss_current" && "$HTTP_PORT" == "$http_current" && "$SOCKS_PORT" == "$socks_current" ]]; then
+        log_info "Ports unchanged"
         return
     fi
 
     local TMP=$(mktemp)
-    jq --argjson p "$PORT" '.inbounds |= map(if .tag == "ss-in" then .port = $p else . end)' "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
+    jq --argjson ss "$SS_PORT" --argjson http "$HTTP_PORT" --argjson socks "$SOCKS_PORT" \
+        '.inbounds |= map(
+            if .tag == "ss-in" then .port = $ss
+            elif .tag == "http-in" then .port = $http
+            elif .tag == "socks-in" then .port = $socks
+            else . end
+        )' "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
 
     validate_config
-    configure_firewall "$PORT"
+    configure_firewall "$SS_PORT"
+    configure_firewall "$HTTP_PORT"
+    configure_firewall "$SOCKS_PORT"
     systemctl restart xray
 
-    log_success "Port changed to $PORT"
+    log_success "Ports updated: SS:$SS_PORT HTTP:$HTTP_PORT SOCKS5:$SOCKS_PORT"
 }
 
 # Show current config
@@ -759,19 +912,23 @@ config_ls() {
 
     local type=$(jq -r '.xcp.type // "unknown"' "$XRAY_CONFIG")
     local version=$(jq -r '.xcp.version // "unknown"' "$XRAY_CONFIG")
-    local port=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local ss_port=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local http_port=$(jq -r '.inbounds[] | select(.tag == "http-in") | .port' "$XRAY_CONFIG")
+    local socks_port=$(jq -r '.inbounds[] | select(.tag == "socks-in") | .port' "$XRAY_CONFIG")
     local loglevel=$(jq -r '.log.loglevel // "warning"' "$XRAY_CONFIG")
 
     echo -e "\n${BOLD}Config:${NC}\n"
-    echo -e "  Type:      ${YELLOW}$type${NC}"
-    echo -e "  Version:   ${YELLOW}$version${NC}"
-    echo -e "  Port:      ${YELLOW}$port${NC}"
-    echo -e "  Log level: ${YELLOW}$loglevel${NC}"
+    echo -e "  Type:       ${YELLOW}$type${NC}"
+    echo -e "  Version:    ${YELLOW}$version${NC}"
+    echo -e "  SS Port:    ${YELLOW}$ss_port${NC}"
+    echo -e "  HTTP Port:  ${YELLOW}$http_port${NC}"
+    echo -e "  SOCKS Port: ${YELLOW}$socks_port${NC}"
+    echo -e "  Log level:  ${YELLOW}$loglevel${NC}"
 
     if [[ "$type" == "edge" ]]; then
         local gw_ip=$(jq -r '.outbounds[] | select(.tag == "proxy") | .settings.servers[0].address' "$XRAY_CONFIG")
         local gw_port=$(jq -r '.outbounds[] | select(.tag == "proxy") | .settings.servers[0].port' "$XRAY_CONFIG")
-        echo -e "  Gateway:   ${YELLOW}$gw_ip:$gw_port${NC}"
+        echo -e "  Gateway:    ${YELLOW}$gw_ip:$gw_port${NC}"
     fi
 
     echo
@@ -928,7 +1085,7 @@ update_xray() {
     [[ -f "$XRAY_BIN" ]] || log_error "Xray not installed"
 
     local current=$("$XRAY_BIN" version 2>/dev/null | head -1 | awk '{print $2}')
-    local latest=$(curl -s "$XRAY_API_URL" | grep '"tag_name"' | sed -E 's/.*"([^"]+)".*/\1/')
+    local latest=$(curl -s "$XRAY_RELEASE_URL" | jq -r '.tag_name // empty')
 
     if [[ "v$current" == "$latest" ]]; then
         log_success "Already latest ($current)"
@@ -937,13 +1094,14 @@ update_xray() {
 
     log_info "Updating $current -> $latest"
 
-    local tmp=$(mktemp -d)
-    trap "rm -rf '$tmp'" RETURN
+    local arch=$(get_arch)
+    mkdir -p "$CACHE_DIR"
+    local zip_file="$CACHE_DIR/Xray-linux-${arch}-${latest}.zip"
 
-    curl -sL -o "$tmp/xray.zip" "https://github.com/XTLS/Xray-core/releases/download/${latest}/Xray-linux-$(get_arch).zip" || log_error "Download failed"
+    download_with_retry "https://github.com/XTLS/Xray-core/releases/download/${latest}/Xray-linux-${arch}.zip" "$zip_file" || log_error "Download failed after retries"
 
     systemctl stop xray
-    unzip -o -q "$tmp/xray.zip" -d "$XRAY_DIR"
+    unzip -o -q "$zip_file" -d "$XRAY_DIR"
     chmod +x "$XRAY_BIN"
     systemctl start xray
 

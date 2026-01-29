@@ -4,21 +4,41 @@ Enabling free internet access for people in countries isolated from the global i
 
 - ⚡ Built on Xray-core
 - ⛓️ Chain proxy architecture with two servers
-- 🔒 Shadowsocks protocol for secure, encrypted communication
+- 🔒 Multiple protocols: Shadowsocks, HTTP, SOCKS5
 - 🌍 Reliable connectivity and freedom of information
 
 ```
-Client --> EDGE --> GATEWAY --> Internet
+Client ────► EDGE ────► GATEWAY ────► Internet
 ```
 
 - **GATEWAY**: Exit node with unrestricted internet access
-- **EDGE**: Entry node accessible to clients
+- **EDGE**: Entry node that forwards traffic to GATEWAY (or another EDGE)
+
+### Multi-EDGE Architectures
+
+**Parallel** - Multiple entry points:
+
+```
+Client A ───► EDGE 1 ───┐
+                        ├───► GATEWAY ───► Internet
+Client B ───► EDGE 2 ───┘
+```
+
+**Chained** - Extra hops for privacy:
+
+```
+Client ───► EDGE 1 ───► EDGE 2 ───► GATEWAY ───► Internet
+```
+
+EDGEs can connect to other EDGEs, not just GATEWAY. Configure each EDGE to point to the next hop in the chain.
 
 ---
 
 ## Prerequisites
 
-- Two Debian/Ubuntu servers with root access
+- One GATEWAY server with unrestricted internet access
+- One or more EDGE servers accessible to clients
+- All servers running Debian/Ubuntu with root access
 
 > Tested on Ubuntu 22.04.5 LTS. Other versions may work but might require adjustments.
 
@@ -43,15 +63,29 @@ On your exit server:
 ./xcp.sh setup gateway
 ```
 
-### 3. Setup Edge
+### 3. Setup Edge(s)
 
-On your entry server:
+On each entry server (can setup multiple):
 
 ```bash
 ./xcp.sh setup edge
 ```
 
-An initial `edge` user is created automatically on both servers.
+Use the same GATEWAY credentials for all EDGE servers.
+
+An initial `edge` user is created automatically on each server.
+
+---
+
+## Protocols & Ports
+
+| Protocol    | Default Port | Description                        |
+| ----------- | ------------ | ---------------------------------- |
+| Shadowsocks | 443          | Encrypted proxy (looks like HTTPS) |
+| HTTP        | 80           | Standard HTTP proxy                |
+| SOCKS5      | 1080         | Standard SOCKS5 proxy              |
+
+All protocols share the same username/password authentication.
 
 ---
 
@@ -112,6 +146,7 @@ An initial `edge` user is created automatically on both servers.
 | Binary | `/usr/local/xray/xray`        |
 | Config | `/usr/local/xray/config.json` |
 | Logs   | `/var/log/xray/`              |
+| Cache  | `/tmp/xray-cache/`            |
 
 ---
 
