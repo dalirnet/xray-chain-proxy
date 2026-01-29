@@ -8,8 +8,10 @@
             name="description"
             content="Chain proxy setup with Shadowsocks, HTTP, and SOCKS5 protocols for bypassing internet censorship"
         />
-        <link rel="stylesheet" href="./theme.css" />
-        <link rel="stylesheet" href="./prism.css" />
+        <link
+            rel="stylesheet"
+            href="https://cdn.jsdelivr.net/npm/docsify@4/lib/themes/vue.css"
+        />
         <style>
             .sidebar-nav > ul > li > a {
                 font-weight: 600;
@@ -51,7 +53,7 @@
                 padding-left: 0;
             }
             body.rtl .markdown-section blockquote {
-                border-right: 4px solid var(--accent, #40a02b);
+                border-right: 4px solid #42b983;
                 border-left: none;
                 padding-right: 1em;
                 padding-left: 0;
@@ -63,7 +65,7 @@
                 right: 0;
                 left: auto;
                 border-right: none;
-                border-left: 1px solid var(--surface1, #bcc0cc);
+                border-left: 1px solid rgba(0, 0, 0, 0.07);
                 text-align: right;
             }
             body.rtl .sidebar > h1,
@@ -93,7 +95,7 @@
             }
             body.rtl .sidebar-nav li.active > a,
             body.rtl .sidebar-nav li a.active {
-                border-right: 2px solid var(--accent, #40a02b);
+                border-right: 2px solid #42b983;
                 border-left: none;
                 padding-right: 10px;
                 padding-left: 0;
@@ -190,9 +192,9 @@
                 auto2top: true,
             };
         </script>
-        <script src="./docsify.min.js"></script>
-        <script src="./prism-bash.min.js"></script>
-        <script src="./prism-json.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/docsify@4"></script>
+        <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
         <script>
             // RTL support for Persian
             (function () {
