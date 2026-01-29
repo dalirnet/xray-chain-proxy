@@ -10,21 +10,9 @@
         />
         <link
             rel="stylesheet"
-            href="https://cdn.jsdelivr.net/npm/docsify-themeable@0/dist/css/theme-simple-dark.css"
+            href="https://docsify.catppuccin.com/latte/green.css"
         />
         <style>
-            :root {
-                --theme-color: #42b883;
-                --base-background-color: #1e1e1e;
-                --cover-background-color: #1e1e1e;
-                --sidebar-background: #252526;
-                --sidebar-nav-link-color--active: #42b883;
-                --sidebar-nav-link-border-color--active: #42b883;
-                --link-color: #42b883;
-                --blockquote-border-color: #42b883;
-                --code-inline-background: #333;
-                --code-theme-background: #1e1e1e;
-            }
             .sidebar-nav > ul > li > a {
                 font-weight: 600;
             }
@@ -39,33 +27,155 @@
                 width: 100%;
             }
             /* RTL support for Persian */
-            body.rtl .sidebar,
-            body.rtl .sidebar-nav,
+            body.rtl {
+                direction: rtl;
+            }
+            /* Content RTL */
             body.rtl .markdown-section {
                 direction: rtl;
                 text-align: right;
             }
+            body.rtl .markdown-section h1,
+            body.rtl .markdown-section h2,
+            body.rtl .markdown-section h3,
+            body.rtl .markdown-section h4,
+            body.rtl .markdown-section h5,
+            body.rtl .markdown-section h6,
+            body.rtl .markdown-section p,
+            body.rtl .markdown-section li,
+            body.rtl .markdown-section blockquote {
+                direction: rtl;
+                text-align: right;
+            }
+            body.rtl .markdown-section ul,
+            body.rtl .markdown-section ol {
+                padding-right: 1.5em;
+                padding-left: 0;
+            }
+            body.rtl .markdown-section blockquote {
+                border-right: 4px solid var(--accent, #40a02b);
+                border-left: none;
+                padding-right: 1em;
+                padding-left: 0;
+                margin-right: 0;
+                margin-left: 1em;
+            }
+            /* Sidebar RTL */
             body.rtl .sidebar {
                 right: 0;
                 left: auto;
+                border-right: none;
+                border-left: 1px solid var(--surface1, #bcc0cc);
+                text-align: right;
+            }
+            body.rtl .sidebar > h1,
+            body.rtl .sidebar > h1 a {
+                text-align: right;
+            }
+            body.rtl .sidebar-nav {
+                direction: rtl;
+                text-align: right;
+            }
+            body.rtl .sidebar-nav ul {
+                padding-right: 0;
+                padding-left: 0;
+                margin-right: 0;
+            }
+            body.rtl .sidebar-nav > ul > li > ul {
+                padding-right: 20px;
+                padding-left: 0;
+            }
+            body.rtl .sidebar-nav li {
+                direction: rtl;
+                text-align: right;
+            }
+            body.rtl .sidebar-nav li a {
+                display: block;
+                text-align: right;
+            }
+            body.rtl .sidebar-nav li.active > a,
+            body.rtl .sidebar-nav li a.active {
+                border-right: 2px solid var(--accent, #40a02b);
+                border-left: none;
+                padding-right: 10px;
+                padding-left: 0;
             }
             body.rtl .sidebar-toggle {
                 right: auto;
-                left: 0;
+                left: 10px;
             }
-            body.rtl .content {
+            /* Main content RTL */
+            body.rtl main {
                 margin-right: 300px;
                 margin-left: 0;
             }
+            body.rtl .content {
+                margin-right: 0;
+                margin-left: 0;
+            }
+            /* Code stays LTR */
             body.rtl .markdown-section pre,
             body.rtl .markdown-section code {
                 direction: ltr;
                 text-align: left;
             }
-            @media (max-width: 768px) {
-                body.rtl .content {
+            /* Tables RTL */
+            body.rtl .markdown-section table {
+                direction: rtl;
+            }
+            body.rtl .markdown-section table th,
+            body.rtl .markdown-section table td {
+                text-align: right;
+            }
+            body.rtl .markdown-section table code {
+                direction: ltr;
+            }
+            /* Navbar RTL */
+            body.rtl nav.app-nav {
+                right: auto;
+                left: 60px;
+                text-align: left;
+            }
+            body.rtl nav.app-nav ul {
+                direction: ltr;
+                text-align: left;
+            }
+            body.rtl nav.app-nav li {
+                display: inline-block;
+                margin: 0 8px;
+            }
+            /* GitHub corner RTL */
+            body.rtl .github-corner {
+                left: 0;
+                right: auto;
+            }
+            body.rtl .github-corner svg {
+                transform: scaleX(-1);
+            }
+            /* Mobile RTL */
+            @media screen and (max-width: 768px) {
+                body.rtl main {
                     margin-right: 0;
                 }
+                body.rtl .sidebar {
+                    right: 0;
+                    left: auto;
+                    transform: translateX(100%);
+                }
+                body.rtl .sidebar-toggle {
+                    left: 10px;
+                    right: auto;
+                }
+                body.rtl nav.app-nav {
+                    left: 50px;
+                    right: auto;
+                }
+            }
+            body.rtl.close .sidebar {
+                transform: translateX(100%);
+            }
+            body.rtl:not(.close) .sidebar {
+                transform: translateX(0);
             }
         </style>
     </head>
@@ -80,16 +190,9 @@
                 loadNavbar: true,
                 subMaxLevel: 2,
                 auto2top: true,
-                alias: {
-                    "/changelog":
-                        "https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/CHANGELOG.md",
-                    "/fa/changelog":
-                        "https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/CHANGELOG.md",
-                },
             };
         </script>
         <script src="https://cdn.jsdelivr.net/npm/docsify@4"></script>
-        <script src="https://cdn.jsdelivr.net/npm/docsify-themeable@0"></script>
         <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-bash.min.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/prismjs@1/components/prism-json.min.js"></script>
         <script>

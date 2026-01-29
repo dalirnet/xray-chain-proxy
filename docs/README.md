@@ -1,6 +1,6 @@
 # Xray Chain Proxy
 
-> **Version 2.0.0** | [Changelog](changelog.md)
+> **Version 2.0.0**
 
 Chain proxy for bypassing internet censorship, built on [Xray-core](https://github.com/XTLS/Xray-core).
 

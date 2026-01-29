@@ -1,6 +1,6 @@
 # Xray Chain Proxy
 
-> **نسخه 2.0.0** | [تغییرات](changelog.md)
+> **نسخه 2.0.0**
 
 پروکسی زنجیره‌ای برای دور زدن سانسور اینترنت، بر پایه [Xray-core](https://github.com/XTLS/Xray-core).
 

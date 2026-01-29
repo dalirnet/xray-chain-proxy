@@ -4,4 +4,3 @@
 - [کلاینت‌ها](/fa/clients.md)
 - [دستورات](/fa/commands.md)
 - [پیشرفته](/fa/advanced.md)
-- [تغییرات](/fa/changelog.md)

@@ -4,4 +4,3 @@
 - [Clients](clients.md)
 - [Commands](commands.md)
 - [Advanced](advanced.md)
-- [Changelog](changelog.md)
