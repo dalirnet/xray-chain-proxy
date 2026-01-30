@@ -44,8 +44,21 @@ stats                 Traffic statistics
 logs [-f] [n]         View logs
 test                  Test connection
 config ls|set         Configuration
+rule ls|add|rm        Manage routing rules
 update                Update Xray
 uninstall             Remove Xray
+```
+
+## Development
+
+Run tests without root access or Xray installation:
+
+```bash
+make test            # Run all tests
+make check-deps      # Verify dependencies
+make lint            # Check syntax
+make version         # Show script version
+make install         # Install to /usr/local/bin/xcp (requires sudo)
 ```
 
 ## Documentation
