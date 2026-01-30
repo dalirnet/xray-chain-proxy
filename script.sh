@@ -27,6 +27,9 @@
 #   script.sh test              - Test proxy and speed
 #   script.sh config ls         - Show current config
 #   script.sh config set        - Set config value
+#   script.sh rule ls           - List routing rules
+#   script.sh rule add          - Add routing rule
+#   script.sh rule rm           - Remove routing rule
 #   script.sh update            - Update Xray to latest version
 #   script.sh uninstall         - Remove Xray completely
 #
@@ -34,7 +37,7 @@
 set -euo pipefail
 
 # Script info
-readonly VERSION="2.0.0"
+readonly VERSION="2.1.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 
 # Directories and files
@@ -136,10 +139,23 @@ download_with_retry() {
     fi
 
     for ((i=1; i<=retries; i++)); do
-        if curl -L --progress-bar --fail -o "$output" "$url" \
-            -w '\n  Speed: %{speed_download}B/s | Time: %{time_total}s | Size: %{size_download}B\n' 2>&1; then
+        local curl_output
+        curl_output=$(curl -L --progress-bar --fail -o "$output" "$url" \
+            -w '%{speed_download}|%{time_total}|%{size_download}' 2>&1)
+
+        if [[ $? -eq 0 ]]; then
+            # Extract metrics from curl output
+            local metrics=$(echo "$curl_output" | tail -1)
+            local speed=$(echo "$metrics" | cut -d'|' -f1 | cut -d'.' -f1)
+            local time=$(echo "$metrics" | cut -d'|' -f2)
+            local size=$(echo "$metrics" | cut -d'|' -f3 | cut -d'.' -f1)
+
+            # Format output
+            echo
+            echo "  Speed: $(format_bytes $speed)/s | Time: ${time}s | Size: $(format_bytes $size)"
             return 0
         fi
+
         # Remove failed partial download
         rm -f "$output"
         [[ $i -lt $retries ]] && log_warn "Download failed, retry $i/$retries in ${delay}s..." && sleep "$delay"
@@ -572,6 +588,10 @@ gen_edge_config() {
     {
       "tag": "direct",
       "protocol": "freedom"
+    },
+    {
+      "tag": "blocked",
+      "protocol": "blackhole"
     }
   ],
   "routing": {
@@ -962,6 +982,188 @@ config_cmd() {
     esac
 }
 
+# List routing rules
+rule_ls() {
+    [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
+
+    local type=$(jq -r '.xcp.type // "unknown"' "$XRAY_CONFIG")
+
+    # Get custom rules (skip built-in API and private IP rules)
+    local rules=$(jq -r '.routing.rules[] | select(.xcp_custom == true)' "$XRAY_CONFIG" 2>/dev/null)
+
+    echo -e "\n${BOLD}Routing Rules (${type}):${NC}\n"
+
+    if [[ -z "$rules" || "$rules" == "null" ]]; then
+        echo "  No custom rules configured"
+        echo
+        return
+    fi
+
+    local count=$(jq '[.routing.rules[] | select(.xcp_custom == true)] | length' "$XRAY_CONFIG")
+    local i=1
+
+    jq -c '.routing.rules[] | select(.xcp_custom == true)' "$XRAY_CONFIG" | while IFS= read -r rule; do
+        local outbound=$(echo "$rule" | jq -r '.outboundTag // "unknown"')
+        local domain=$(echo "$rule" | jq -r '.domain // [] | join(", ")')
+        local ip=$(echo "$rule" | jq -r '.ip // [] | join(", ")')
+
+        echo -e "${CYAN}$i)${NC} → ${YELLOW}$outbound${NC}"
+        [[ -n "$domain" && "$domain" != "" ]] && echo "   Domain: $domain"
+        [[ -n "$ip" && "$ip" != "" ]] && echo "   IP: $ip"
+        echo
+        ((i++))
+    done
+}
+
+# Add routing rule
+rule_add() {
+    check_root
+    [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
+
+    local type=$(jq -r '.xcp.type // "unknown"' "$XRAY_CONFIG")
+
+    echo -e "\n${BOLD}Add Routing Rule${NC}\n"
+
+    # Show available outbound tags
+    echo -e "${BOLD}Available outbounds:${NC}"
+    if [[ "$type" == "gateway" ]]; then
+        echo "  direct  - Direct connection"
+        echo "  blocked - Block traffic"
+    elif [[ "$type" == "edge" ]]; then
+        echo "  proxy   - Through gateway proxy"
+        echo "  direct  - Direct connection (bypass proxy)"
+        echo "  blocked - Block traffic"
+    else
+        log_error "Unknown server type"
+    fi
+    echo
+
+    # Get outbound tag
+    local OUTBOUND
+    while true; do
+        read -rp "Outbound tag: " OUTBOUND
+        if [[ "$type" == "gateway" && ("$OUTBOUND" == "direct" || "$OUTBOUND" == "blocked") ]]; then
+            break
+        elif [[ "$type" == "edge" && ("$OUTBOUND" == "proxy" || "$OUTBOUND" == "direct" || "$OUTBOUND" == "blocked") ]]; then
+            break
+        else
+            echo -e "${RED}Invalid outbound for $type server${NC}"
+        fi
+    done
+
+    # Get rule type
+    echo -e "\n${BOLD}Rule type:${NC}"
+    echo "  1) Domain (e.g., google.com, domain:netflix.com, geosite:cn)"
+    echo "  2) IP/CIDR (e.g., 8.8.8.8, 1.1.1.0/24, geoip:us)"
+    echo
+
+    local RULE_TYPE
+    read -rp "Select type (1-2): " RULE_TYPE
+
+    local RULE_VALUE DOMAIN_ARR IP_ARR
+    case "$RULE_TYPE" in
+        1)
+            read -rp "Domain(s) [comma-separated]: " RULE_VALUE
+            [[ -z "$RULE_VALUE" ]] && log_error "Domain required"
+            # Convert comma-separated to JSON array
+            DOMAIN_ARR=$(echo "$RULE_VALUE" | jq -R 'split(",") | map(gsub("^[[:space:]]+|[[:space:]]+$";""))')
+            ;;
+        2)
+            read -rp "IP/CIDR(s) [comma-separated]: " RULE_VALUE
+            [[ -z "$RULE_VALUE" ]] && log_error "IP required"
+            # Convert comma-separated to JSON array
+            IP_ARR=$(echo "$RULE_VALUE" | jq -R 'split(",") | map(gsub("^[[:space:]]+|[[:space:]]+$";""))')
+            ;;
+        *)
+            log_error "Invalid type"
+            ;;
+    esac
+
+    # Build the new rule
+    local NEW_RULE
+    if [[ "$RULE_TYPE" == "1" ]]; then
+        NEW_RULE=$(jq -n --arg tag "$OUTBOUND" --argjson domains "$DOMAIN_ARR" \
+            '{type: "field", domain: $domains, outboundTag: $tag, xcp_custom: true}')
+    else
+        NEW_RULE=$(jq -n --arg tag "$OUTBOUND" --argjson ips "$IP_ARR" \
+            '{type: "field", ip: $ips, outboundTag: $tag, xcp_custom: true}')
+    fi
+
+    # Insert custom rule after API rule(s) but before catch-all rules
+    # For gateway: after API and private IP rules
+    # For edge: after API rule, before client catch-all rule
+    local TMP=$(mktemp)
+    local type=$(jq -r '.xcp.type // "unknown"' "$XRAY_CONFIG")
+
+    if [[ "$type" == "gateway" ]]; then
+        # Gateway: append after all built-in rules (API, private IP)
+        jq --argjson newrule "$NEW_RULE" \
+            '.routing.rules += [$newrule]' \
+            "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
+    elif [[ "$type" == "edge" ]]; then
+        # Edge: insert after API rule (index 0), before client catch-all (current last)
+        jq --argjson newrule "$NEW_RULE" \
+            '.routing.rules = (.routing.rules[0:1] + [$newrule] + .routing.rules[1:])' \
+            "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
+    else
+        rm -f "$TMP"
+        log_error "Unknown server type"
+    fi
+
+    validate_config
+    systemctl restart xray
+
+    log_success "Rule added: $RULE_VALUE → $OUTBOUND"
+}
+
+# Remove routing rule
+rule_rm() {
+    check_root
+    [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
+
+    # Check if there are custom rules
+    local count=$(jq '[.routing.rules[] | select(.xcp_custom == true)] | length' "$XRAY_CONFIG")
+
+    if [[ "$count" -eq 0 ]]; then
+        log_error "No custom rules to remove"
+    fi
+
+    # Show current rules
+    rule_ls
+
+    local INDEX
+    read -rp "Rule number to remove (1-$count): " INDEX
+
+    if [[ ! "$INDEX" =~ ^[0-9]+$ ]] || [[ "$INDEX" -lt 1 ]] || [[ "$INDEX" -gt "$count" ]]; then
+        log_error "Invalid rule number"
+    fi
+
+    # Remove the INDEX-th custom rule
+    local TMP=$(mktemp)
+    jq --argjson idx "$((INDEX - 1))" '
+        .routing.rules |= (
+            [.[] | select(.xcp_custom == true)] as $customs |
+            [.[] | select(.xcp_custom != true)] +
+            [$customs | to_entries | map(select(.key != $idx)) | .[].value]
+        )
+    ' "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
+
+    validate_config
+    systemctl restart xray
+
+    log_success "Rule #$INDEX removed"
+}
+
+# Rule command router
+rule_cmd() {
+    case "${1:-}" in
+        ls)  rule_ls ;;
+        add) rule_add ;;
+        rm)  rule_rm ;;
+        *)   echo -e "\nUsage: $SCRIPT_NAME rule <ls|add|rm>\n" ;;
+    esac
+}
+
 # Show service status
 show_status() {
     echo -e "\n${BOLD}Status:${NC}\n"
@@ -1079,6 +1281,53 @@ test_proxy() {
     fi
 }
 
+# Update script from GitHub
+update_script() {
+    check_root
+
+    local script_url="https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/script.sh"
+    local current_version="$VERSION"
+
+    log_info "Checking for script updates..."
+
+    # Download new version to temp file
+    local temp_script=$(mktemp)
+    if ! curl -fsSL "$script_url" -o "$temp_script"; then
+        rm -f "$temp_script"
+        log_error "Failed to download script from GitHub"
+    fi
+
+    # Extract version from downloaded script
+    local new_version=$(grep -m1 '^readonly VERSION=' "$temp_script" | cut -d'"' -f2)
+
+    if [[ -z "$new_version" ]]; then
+        rm -f "$temp_script"
+        log_error "Failed to determine remote version"
+    fi
+
+    if [[ "$current_version" == "$new_version" ]]; then
+        rm -f "$temp_script"
+        log_success "Script already at latest version ($current_version)"
+        return
+    fi
+
+    log_info "Updating script $current_version -> $new_version"
+
+    # Get the path of the current script
+    local script_path="$(readlink -f "$0" 2>/dev/null || realpath "$0" 2>/dev/null || echo "$0")"
+
+    # Backup current script
+    cp "$script_path" "${script_path}.bak"
+
+    # Replace with new version
+    cat "$temp_script" > "$script_path"
+    chmod +x "$script_path"
+    rm -f "$temp_script"
+
+    log_success "Script updated to $new_version"
+    log_info "Backup saved: ${script_path}.bak"
+}
+
 # Update Xray to latest version
 update_xray() {
     check_root
@@ -1088,11 +1337,11 @@ update_xray() {
     local latest=$(curl -s "$XRAY_RELEASE_URL" | jq -r '.tag_name // empty')
 
     if [[ "v$current" == "$latest" ]]; then
-        log_success "Already latest ($current)"
+        log_success "Xray already at latest version ($current)"
         return
     fi
 
-    log_info "Updating $current -> $latest"
+    log_info "Updating Xray $current -> $latest"
 
     local arch=$(get_arch)
     mkdir -p "$CACHE_DIR"
@@ -1105,7 +1354,37 @@ update_xray() {
     chmod +x "$XRAY_BIN"
     systemctl start xray
 
-    log_success "Updated to $latest"
+    log_success "Xray updated to $latest"
+}
+
+# Update both script and Xray
+update_all() {
+    echo -e "\n${BOLD}Update Xray Chain Proxy${NC}\n"
+    echo "1) Script only"
+    echo "2) Xray only"
+    echo "3) Both (recommended)"
+    echo
+
+    local choice
+    read -rp "Select option (1-3, default: 3): " choice
+    choice="${choice:-3}"
+
+    case "$choice" in
+        1)
+            update_script
+            ;;
+        2)
+            update_xray
+            ;;
+        3)
+            update_script
+            echo
+            update_xray
+            ;;
+        *)
+            log_error "Invalid option"
+            ;;
+    esac
 }
 
 # Uninstall Xray completely
@@ -1149,7 +1428,11 @@ Commands:
   config ls         Show current config
   config set        Set config value
 
-  update            Update Xray
+  rule ls           List routing rules
+  rule add          Add routing rule
+  rule rm           Remove routing rule
+
+  update            Update script and Xray
   uninstall         Remove Xray
 
 Flow: Client --> EDGE --> GATEWAY --> Internet
@@ -1179,7 +1462,8 @@ main() {
         logs)      shift; show_logs "$@" ;;
         test)      test_proxy ;;
         config)    config_cmd "${2:-}" ;;
-        update)    update_xray ;;
+        rule)      rule_cmd "${2:-}" ;;
+        update)    update_all ;;
         uninstall) check_root; uninstall_xray ;;
         help|--help|-h) show_help ;;
         version|--version|-v) echo "v$VERSION" ;;
