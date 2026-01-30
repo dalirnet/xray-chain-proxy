@@ -1138,13 +1138,22 @@ rule_rm() {
         log_error "Invalid rule number"
     fi
 
-    # Remove the INDEX-th custom rule
+    # Remove the INDEX-th custom rule while preserving order
     local TMP=$(mktemp)
     jq --argjson idx "$((INDEX - 1))" '
         .routing.rules |= (
-            [.[] | select(.xcp_custom == true)] as $customs |
-            [.[] | select(.xcp_custom != true)] +
-            [$customs | to_entries | map(select(.key != $idx)) | .[].value]
+            reduce .[] as $rule (
+                {result: [], custom_count: 0};
+                if $rule.xcp_custom == true then
+                    if .custom_count == $idx then
+                        {result: .result, custom_count: (.custom_count + 1)}
+                    else
+                        {result: (.result + [$rule]), custom_count: (.custom_count + 1)}
+                    end
+                else
+                    {result: (.result + [$rule]), custom_count: .custom_count}
+                end
+            ) | .result
         )
     ' "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
 

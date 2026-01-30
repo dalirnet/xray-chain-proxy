@@ -176,6 +176,33 @@ EOF
     local rule_order=$(jq -r '.routing.rules | map(select(.xcp_custom == true) | .outboundTag) | join(",")' "$TEST_CONFIG")
     test_assert "Edge: Rule order maintained" "[[ '$rule_order' == 'direct,direct,blocked' ]]" || true
 
+    # Edge - Test removing middle custom rule while preserving order
+    jq --argjson idx 1 '
+        .routing.rules |= (
+            reduce .[] as $rule (
+                {result: [], custom_count: 0};
+                if $rule.xcp_custom == true then
+                    if .custom_count == $idx then
+                        {result: .result, custom_count: (.custom_count + 1)}
+                    else
+                        {result: (.result + [$rule]), custom_count: (.custom_count + 1)}
+                    end
+                else
+                    {result: (.result + [$rule]), custom_count: .custom_count}
+                end
+            ) | .result
+        )
+    ' "$TEST_CONFIG" > "$TEST_CONFIG.tmp" && mv "$TEST_CONFIG.tmp" "$TEST_CONFIG"
+
+    count=$(jq '[.routing.rules[] | select(.xcp_custom == true)] | length' "$TEST_CONFIG")
+    test_assert "Edge: Remove rule reduces count" "[[ '$count' -eq 2 ]]" || true
+
+    last_rule_tag=$(jq -r '.routing.rules[-1].inboundTag[0]' "$TEST_CONFIG")
+    test_assert "Edge: Catch-all still last after removal" "[[ '$last_rule_tag' == 'ss-in' ]]" || true
+
+    rule_order=$(jq -r '.routing.rules | map(select(.xcp_custom == true) | .outboundTag) | join(",")' "$TEST_CONFIG")
+    test_assert "Edge: Rule order preserved after removal" "[[ '$rule_order' == 'direct,blocked' ]]" || true
+
     rm -rf "$TEST_DIR"
 }
 
