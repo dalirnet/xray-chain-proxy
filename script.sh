@@ -1101,9 +1101,9 @@ rule_add() {
             '.routing.rules += [$newrule]' \
             "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
     elif [[ "$type" == "edge" ]]; then
-        # Edge: insert after API rule (index 0), before client catch-all (current last)
+        # Edge: insert after API rule and custom rules, before client catch-all (last rule)
         jq --argjson newrule "$NEW_RULE" \
-            '.routing.rules = (.routing.rules[0:1] + [$newrule] + .routing.rules[1:])' \
+            '.routing.rules = (.routing.rules[:-1] + [$newrule] + .routing.rules[-1:])' \
             "$XRAY_CONFIG" > "$TMP" && mv "$TMP" "$XRAY_CONFIG"
     else
         rm -f "$TMP"

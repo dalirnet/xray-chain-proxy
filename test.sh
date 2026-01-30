@@ -143,7 +143,7 @@ EOF
 EOF
 
     new_rule='{"type":"field","domain":["netflix.com"],"outboundTag":"direct","xcp_custom":true}'
-    jq --argjson rule "$new_rule" '.routing.rules = (.routing.rules[0:1] + [$rule] + .routing.rules[1:])' "$TEST_CONFIG" > "$TEST_CONFIG.tmp" && mv "$TEST_CONFIG.tmp" "$TEST_CONFIG"
+    jq --argjson rule "$new_rule" '.routing.rules = (.routing.rules[:-1] + [$rule] + .routing.rules[-1:])' "$TEST_CONFIG" > "$TEST_CONFIG.tmp" && mv "$TEST_CONFIG.tmp" "$TEST_CONFIG"
 
     local rule_index=$(jq -r '.routing.rules[1].xcp_custom' "$TEST_CONFIG")
     test_assert "Edge: Rule inserted before catch-all" "[[ '$rule_index' == 'true' ]]" || true
@@ -151,19 +151,30 @@ EOF
     local outbound=$(jq -r '.routing.rules[1].outboundTag' "$TEST_CONFIG")
     test_assert "Edge: Direct outbound set correctly" "[[ '$outbound' == 'direct' ]]" || true
 
-    # Edge - Add proxy rule with geoip
-    new_rule='{"type":"field","ip":["geoip:ir"],"outboundTag":"proxy","xcp_custom":true}'
-    jq --argjson rule "$new_rule" '.routing.rules = (.routing.rules[0:1] + [$rule] + .routing.rules[1:])' "$TEST_CONFIG" > "$TEST_CONFIG.tmp" && mv "$TEST_CONFIG.tmp" "$TEST_CONFIG"
+    # Edge - Add geoip:ir rule (should go before catch-all, after first custom rule)
+    new_rule='{"type":"field","ip":["geoip:ir"],"outboundTag":"direct","xcp_custom":true}'
+    jq --argjson rule "$new_rule" '.routing.rules = (.routing.rules[:-1] + [$rule] + .routing.rules[-1:])' "$TEST_CONFIG" > "$TEST_CONFIG.tmp" && mv "$TEST_CONFIG.tmp" "$TEST_CONFIG"
 
     count=$(jq '[.routing.rules[] | select(.xcp_custom == true)] | length' "$TEST_CONFIG")
     test_assert "Edge: Add multiple custom rules" "[[ '$count' -eq 2 ]]" || true
 
-    # Edge - Add blocked rule
+    local geoip=$(jq -r '.routing.rules[2].ip[0]' "$TEST_CONFIG")
+    test_assert "Edge: GeoIP rule correct" "[[ '$geoip' == 'geoip:ir' ]]" || true
+
+    # Edge - Add blocked rule (should be inserted before catch-all)
     new_rule='{"type":"field","domain":["malware.com"],"outboundTag":"blocked","xcp_custom":true}'
-    jq --argjson rule "$new_rule" '.routing.rules = (.routing.rules[0:1] + [$rule] + .routing.rules[1:])' "$TEST_CONFIG" > "$TEST_CONFIG.tmp" && mv "$TEST_CONFIG.tmp" "$TEST_CONFIG"
+    jq --argjson rule "$new_rule" '.routing.rules = (.routing.rules[:-1] + [$rule] + .routing.rules[-1:])' "$TEST_CONFIG" > "$TEST_CONFIG.tmp" && mv "$TEST_CONFIG.tmp" "$TEST_CONFIG"
 
     outbound=$(jq -r '[.routing.rules[] | select(.xcp_custom == true and .domain[0] == "malware.com")] | .[0].outboundTag' "$TEST_CONFIG")
     test_assert "Edge: Blocked outbound set correctly" "[[ '$outbound' == 'blocked' ]]" || true
+
+    # Edge - Verify catch-all is still last
+    local last_rule_tag=$(jq -r '.routing.rules[-1].inboundTag[0]' "$TEST_CONFIG")
+    test_assert "Edge: Catch-all still last" "[[ '$last_rule_tag' == 'ss-in' ]]" || true
+
+    # Edge - Verify rule order is correct
+    local rule_order=$(jq -r '.routing.rules | map(select(.xcp_custom == true) | .outboundTag) | join(",")' "$TEST_CONFIG")
+    test_assert "Edge: Rule order maintained" "[[ '$rule_order' == 'direct,direct,blocked' ]]" || true
 
     rm -rf "$TEST_DIR"
 }
