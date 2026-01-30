@@ -178,17 +178,56 @@ Options:
 1. `loglevel` - Set log level (none/warning/info/debug)
 2. `port` - Change listen ports
 
+## Routing Rules
+
+### `rule ls`
+
+List all custom routing rules.
+
+```bash
+./xcp.sh rule ls
+```
+
+Shows rule number, outbound tag, and matched domains/IPs.
+
+### `rule add`
+
+Add new routing rule interactively.
+
+```bash
+./xcp.sh rule add
+```
+
+Prompts for outbound (direct/proxy/blocked), rule type, and values.
+
+See [Routing Rules](routing.md) for detailed examples.
+
+### `rule rm`
+
+Remove routing rule by number.
+
+```bash
+./xcp.sh rule rm
+```
+
+Shows current rules, prompts for rule number to remove.
+
 ## Maintenance
 
 ### `update`
 
-Update Xray to latest version.
+Update script and Xray to latest versions.
 
 ```bash
 ./xcp.sh update
 ```
 
-Configuration is preserved.
+Interactive menu to update:
+- Script only (from GitHub)
+- Xray only
+- Both (recommended)
+
+Configuration is preserved. Script backup saved as `script.sh.bak`.
 
 ### `uninstall`
 

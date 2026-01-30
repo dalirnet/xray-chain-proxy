@@ -2,4 +2,5 @@
 - [Providers](providers.md)
 - [Clients](clients.md)
 - [Commands](commands.md)
+- [Routing Rules](routing.md)
 - [Advanced](advanced.md)

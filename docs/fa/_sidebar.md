@@ -2,4 +2,5 @@
 - [ارائه‌دهندگان](/fa/providers.md)
 - [کلاینت‌ها](/fa/clients.md)
 - [دستورات](/fa/commands.md)
+- [قوانین مسیریابی](/fa/routing.md)
 - [پیشرفته](/fa/advanced.md)
