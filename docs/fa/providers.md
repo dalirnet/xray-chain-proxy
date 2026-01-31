@@ -27,7 +27,6 @@
 | پارس‌آنلاین | [parsonline.com](https://www.parsonline.com) |
 | افرانت      | [afranet.com](https://www.afranet.com)       |
 | ایرانسرور   | [iranserver.com](https://www.iranserver.com) |
-| زیرساخت     | [zirsakhte.com](https://www.zirsakhte.com)   |
 | ابر آروان   | [arvancloud.ir](https://www.arvancloud.ir)   |
 
 ## حداقل نیازمندی‌ها
