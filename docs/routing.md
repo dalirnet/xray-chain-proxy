@@ -92,6 +92,8 @@ Add a new routing rule interactively.
 2. Rule type (1=domain, 2=IP)
 3. Values (comma-separated)
 
+![Rule Add](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/rule-add.gif)
+
 ### Remove Rule
 
 Remove a routing rule by number.

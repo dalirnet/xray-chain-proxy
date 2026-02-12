@@ -4,6 +4,8 @@
 
 یک راه‌حل قدرتمند پروکسی زنجیره‌ای برای دور زدن سانسور اینترنت، بر پایه [Xray-core](https://github.com/XTLS/Xray-core).
 
+![Setup Edge](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/png/setup-edge.png)
+
 ## نحوه عملکرد
 
 | سرور      | موقعیت      | نقش                                           |

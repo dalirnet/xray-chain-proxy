@@ -12,6 +12,8 @@ Install and configure as exit node.
 
 Prompts for ports, installs Xray, creates initial `edge` user.
 
+![Setup Gateway](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/setup-gateway.gif)
+
 ### `setup edge`
 
 Install and configure as entry node.
@@ -21,6 +23,8 @@ Install and configure as entry node.
 ```
 
 Prompts for GATEWAY connection details and local ports.
+
+![Setup Edge](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/setup-edge.gif)
 
 ## Service Control
 
@@ -49,6 +53,8 @@ Prompts for GATEWAY connection details and local ports.
 ```
 
 Shows running state and Xray version.
+
+![Status](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/status.gif)
 
 ## User Management
 
@@ -86,6 +92,8 @@ Add new user interactively.
 
 Shows QR code if `qrencode` is installed.
 
+![User Add](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/user-add.gif)
+
 ### `user rm`
 
 Remove user by username.
@@ -103,6 +111,8 @@ Traffic statistics per user.
 ```bash
 ./xcp.sh stats
 ```
+
+![Stats](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/stats.gif)
 
 Output:
 
@@ -140,6 +150,8 @@ Test proxy connection and speed.
 ```
 
 On EDGE: tests chain connectivity, shows exit IP, runs speed test.
+
+![Test](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/test.gif)
 
 ## Configuration
 

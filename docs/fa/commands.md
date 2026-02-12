@@ -10,6 +10,8 @@
 ./xcp.sh setup gateway
 ```
 
+![Setup Gateway](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/setup-gateway.gif)
+
 ### `setup edge`
 
 نصب و پیکربندی به عنوان نود ورودی.
@@ -17,6 +19,8 @@
 ```bash
 ./xcp.sh setup edge
 ```
+
+![Setup Edge](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/setup-edge.gif)
 
 ## کنترل سرویس
 
@@ -45,6 +49,8 @@
 ```
 
 وضعیت اجرا و نسخه Xray را نمایش می‌دهد.
+
+![Status](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/status.gif)
 
 ## مدیریت کاربران
 
@@ -82,6 +88,8 @@ Accounts:
 
 اگر `qrencode` نصب باشد، QR کد نمایش می‌دهد.
 
+![User Add](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/user-add.gif)
+
 ### `user rm`
 
 حذف کاربر.
@@ -99,6 +107,8 @@ Accounts:
 ```bash
 ./xcp.sh stats
 ```
+
+![Stats](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/stats.gif)
 
 خروجی:
 
@@ -134,6 +144,8 @@ System:
 ```bash
 ./xcp.sh test
 ```
+
+![Test](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/test.gif)
 
 ## پیکربندی
 

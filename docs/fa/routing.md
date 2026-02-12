@@ -92,6 +92,8 @@ Routing Rules (edge):
 2. نوع قانون (1=دامنه، 2=IP)
 3. مقادیر (جدا شده با کاما)
 
+![Rule Add](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/rule-add.gif)
+
 ### حذف قانون
 
 حذف قانون مسیریابی با شماره.

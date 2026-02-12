@@ -4,6 +4,8 @@
 
 A powerful chain proxy solution for bypassing internet censorship, built on [Xray-core](https://github.com/XTLS/Xray-core).
 
+![Setup Edge](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/png/setup-edge.png)
+
 ## How It Works
 
 ```
