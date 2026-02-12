@@ -334,13 +334,13 @@ case "${1:-}" in
     __run_test)          run_test ;;
     __run_rule-add)      run_rule_add ;;
     *)
-        # record_demo "setup-gateway" 26
-        # record_demo "setup-edge" 26
+        record_demo "setup-gateway" 26
+        record_demo "setup-edge" 26
         record_demo "user-add" 26
-        # record_demo "status" 8
-        # record_demo "stats" 12
-        # record_demo "test" 12
-        # record_demo "rule-add" 20
+        record_demo "status" 8
+        record_demo "stats" 12
+        record_demo "test" 12
+        record_demo "rule-add" 20
         echo ""
         echo "All done!"
         ;;
