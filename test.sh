@@ -611,11 +611,17 @@ test_ip_echo() {
     test_section "Testing IP Echo (port 80)"
 
     local lib="/tmp/xcp-echo-lib-$$.sh"
-    sed '$d' "$SCRIPT_PATH" > "$lib"
+    local dir="/tmp/xcp-echo-dir-$$"
+    rm -rf "$dir"
+    sed '$d' "$SCRIPT_PATH" | sed "s#^readonly XRAY_DIR=.*#readonly XRAY_DIR=\"$dir\"#" > "$lib"
 
-    # $lib is in scope here - bash locals are visible to functions it calls
+    # Generate and run the standalone responder - that file, not a function in
+    # script.sh, is what the socket unit executes
+    bash -c "source '$lib'; web_write_responder" 2>/dev/null
+    local echo_bin="$dir/ip-echo.sh"
+
     run_echo() {
-        printf 'GET / HTTP/1.1\r\n\r\n' | REMOTE_ADDR="$1" bash -c "source '$lib'; web_respond" 2>/dev/null
+        printf 'GET / HTTP/1.1\r\n\r\n' | REMOTE_ADDR="$1" "$echo_bin" 2>/dev/null
     }
 
     local out
@@ -637,10 +643,15 @@ test_ip_echo() {
     test_assert "Headers use CRLF" "[[ \"\$(run_echo 5.6.7.8 | head -1 | od -c | grep -c '\\\\r')\" -ge 1 ]]" || true
 
     # systemd sets REMOTE_ADDR; without it the responder still answers cleanly
-    out=$(printf 'GET / HTTP/1.1\r\n\r\n' | bash -c "source '$lib'; unset REMOTE_ADDR; web_respond" 2>/dev/null)
+    out=$(printf 'GET / HTTP/1.1\r\n\r\n' | env -u REMOTE_ADDR "$echo_bin" 2>/dev/null)
     test_assert "Answers even without REMOTE_ADDR" "[[ '$out' == 'HTTP/1.1 200 OK'* ]]" || true
 
-    rm -f "$lib"
+    # It must not depend on script.sh: the unit runs it as an unprivileged
+    # transient user, and script.sh usually sits in a home directory
+    test_assert "Responder is self-contained" "! grep -q 'xcp.sh' '$echo_bin'" || true
+    test_assert "Responder is world-executable" "[[ -r '$echo_bin' && -x '$echo_bin' ]]" || true
+
+    rm -f "$lib"; rm -rf "$dir"
 }
 
 test_dns_access() {
@@ -833,16 +844,20 @@ test_pipefail_paths() {
     # The port 80 responder must consume the whole request head: leaving bytes
     # unread makes the kernel send RST instead of FIN, which can lose the reply
     local left
+    local edir="/tmp/xcp-pf-dir-$$"
+    rm -rf "$edir"
+    sed "s#^readonly XRAY_DIR=.*#readonly XRAY_DIR=\"$edir\"#" "$lib" > "$lib.d"
+    bash -c "source '$lib.d'; web_write_responder" 2>/dev/null
     left=$(printf 'GET / HTTP/1.1\r\nHost: x\r\nUser-Agent: c\r\nAccept: */*\r\n\r\n' | \
-        bash -c "source '$lib'; REMOTE_ADDR=1.2.3.4 web_respond >/dev/null; cat" 2>/dev/null || true)
+        { REMOTE_ADDR=1.2.3.4 "$edir/ip-echo.sh" >/dev/null; cat; } 2>/dev/null || true)
     test_assert "Responder drains the full request" "[[ -z '$left' ]]" || true
 
     # A client that closes without the blank terminator must not hang a worker
-    out=$(printf 'GET / HTTP/1.1\r\n' | bash -c "source '$lib'; REMOTE_ADDR=9.9.9.9 web_respond" 2>&1 || true)
+    out=$(printf 'GET / HTTP/1.1\r\n' | REMOTE_ADDR=9.9.9.9 "$edir/ip-echo.sh" 2>&1 || true)
     got=no; [[ "$out" == "HTTP/1.1 200 OK"* ]] && got=yes
     test_assert "Truncated request still answers" "[[ '$got' == yes ]]" || true
 
-    rm -f "$lib" "$fake"
+    rm -f "$lib" "$lib.d" "$fake"; rm -rf "$edir"
 }
 
 test_config_write() {

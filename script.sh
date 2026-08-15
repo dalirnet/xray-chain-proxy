@@ -122,6 +122,7 @@ readonly REALITY_FLOW="xtls-rprx-vision"
 readonly WEB_PORT=80
 readonly WEB_SOCKET="/etc/systemd/system/xcp-web.socket"
 readonly WEB_SERVICE="/etc/systemd/system/xcp-web@.service"
+readonly WEB_RESPONDER="${XRAY_DIR}/ip-echo.sh"
 readonly RESOLVED_DROPIN="/etc/systemd/resolved.conf.d/xcp.conf"
 
 # DNS resolver the servers answer with (plain IP, tcp://IP or a DoH URL)
@@ -687,43 +688,61 @@ restore_dns_port() {
 
 # --- Port 80 responder ---
 
-# Answer one connection with the caller's IP, then exit.
+# Write the standalone responder the socket unit runs.
+#
+# It is a separate file, not `xcp.sh respond`, because the unit runs as nobody
+# and xcp.sh normally lives in root's home, which nobody cannot read - that is
+# an exec failure, so systemd closes the connection and the client sees RST.
+# Keeping it here also means moving or renaming xcp.sh cannot break port 80.
+#
 # systemd sets REMOTE_ADDR for an Accept=yes socket, so the address comes from
 # the kernel rather than from anything the client can claim.
-web_respond() {
-    local ip="${REMOTE_ADDR:-unknown}"
-    local line deadline=$(( SECONDS + 3 ))
+web_write_responder() {
+    mkdir -p "$XRAY_DIR"
 
-    # IPv4 arriving on a dual-stack socket shows up as ::ffff:1.2.3.4
-    ip="${ip#::ffff:}"
+    cat > "$WEB_RESPONDER" << 'RESPONDER'
+#!/usr/bin/env bash
+# Managed by xray-chain-proxy - answers one connection with the caller's IP.
 
-    # Read the whole request head, not just its first line. stdin here is the
-    # socket itself, and exiting with bytes still unread makes the kernel send
-    # RST instead of FIN - which can destroy a response the client is still
-    # reading. Bounded by a deadline and a per-line size cap so a client that
-    # never sends the blank terminator cannot hold the worker open.
-    while (( SECONDS < deadline )); do
-        read -r -t 1 -n 8192 line || break
-        [[ -z "${line%$'\r'}" ]] && break
-    done
+ip="${REMOTE_ADDR:-unknown}"
 
-    printf 'HTTP/1.1 200 OK\r\n'
-    printf 'Content-Type: text/plain; charset=utf-8\r\n'
-    printf 'Content-Length: %d\r\n' "$(( ${#ip} + 1 ))"
-    printf 'Connection: close\r\n'
-    printf 'Cache-Control: no-store\r\n'
-    printf '\r\n'
-    printf '%s\n' "$ip"
+# IPv4 arriving on a dual-stack socket shows up as ::ffff:1.2.3.4
+ip="${ip#::ffff:}"
+
+# Read the whole request head. stdin here is the socket itself, and exiting
+# with bytes still unread makes the kernel send RST instead of FIN, which can
+# destroy a response the client is still reading. Bounded by a deadline and a
+# per-line size cap so a client that never terminates cannot hold this open.
+deadline=$(( SECONDS + 3 ))
+while (( SECONDS < deadline )); do
+    read -r -t 1 -n 8192 line || break
+    [[ -z "${line%$'\r'}" ]] && break
+done
+
+printf 'HTTP/1.1 200 OK\r\n'
+printf 'Content-Type: text/plain; charset=utf-8\r\n'
+printf 'Content-Length: %d\r\n' "$(( ${#ip} + 1 ))"
+printf 'Connection: close\r\n'
+printf 'Cache-Control: no-store\r\n'
+printf '\r\n'
+printf '%s\n' "$ip"
+RESPONDER
+
+    # World-readable and executable: the unit runs as nobody
+    chmod 755 "$WEB_RESPONDER"
 }
 
 # Install the socket and its per-connection responder.
 # The responder faces the internet, so it runs as nobody with the filesystem
 # read-only and privilege escalation off - systemd binds the privileged port
 # and the responder never needs root.
+# Install the socket and its per-connection responder.
+#
+# DynamicUser gives each worker a transient unprivileged identity, which systemd
+# prefers over `User=nobody` - nobody is shared with every other service that
+# picks it, and systemd warns about exactly that.
 web_install() {
-    local self group
-    self=$(readlink -f "$0")
-    group=$(getent group nogroup &>/dev/null && echo nogroup || echo nobody)
+    web_write_responder
 
     cat > "$WEB_SOCKET" << EOF
 [Unit]
@@ -744,12 +763,11 @@ Description=Xray Chain Proxy IP Echo
 
 [Service]
 Type=simple
-ExecStart=${self} respond
+ExecStart=${WEB_RESPONDER}
 StandardInput=socket
 StandardOutput=socket
 StandardError=journal
-User=nobody
-Group=${group}
+DynamicUser=yes
 NoNewPrivileges=yes
 PrivateTmp=yes
 ProtectSystem=strict
@@ -775,7 +793,7 @@ EOF
 web_purge() {
     systemctl stop xcp-web.socket 2>/dev/null || true
     systemctl disable xcp-web.socket --quiet 2>/dev/null || true
-    rm -f "$WEB_SOCKET" "$WEB_SERVICE"
+    rm -f "$WEB_SOCKET" "$WEB_SERVICE" "$WEB_RESPONDER"
     systemctl daemon-reload 2>/dev/null || true
 }
 
@@ -2884,8 +2902,6 @@ main() {
         dns)       dns_cmd "${2:-}" "${3:-}" ;;
         rule)      rule_cmd "${2:-}" ;;
         link)      link_cmd "${2:-}" "${3:-}" ;;
-        # Invoked by xcp-web@.service, once per connection to port 80
-        respond)   web_respond ;;
         update)    update_all ;;
         uninstall) check_root; uninstall_xray ;;
         help|--help|-h) show_help ;;
