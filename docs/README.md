@@ -117,7 +117,7 @@ You'll configure:
 - VLESS (REALITY) port (default: 443)
 - Shadowsocks port (default: 8443)
 - DNS resolver (default: 1.1.1.1)
-- REALITY dest domain (default: `www.microsoft.com`) — checked for TLS 1.3 and HTTP/2 before it is accepted
+- REALITY dest domain (default: `www.bing.com`) — checked for TLS 1.3 and HTTP/2 before it is accepted
 - Tunnel SSH password — press Enter to generate a 32-character one
 
 Setup creates the `xcp` SSH user with that password, allows it in `sshd_config`, and prints everything the EDGE needs:
@@ -132,7 +132,7 @@ Use on EDGE server (setup edge):
   SSH Pass:   kQ8vR2mZ...
 
 Direct client access:
-  VLESS Port: 443 (REALITY, borrowing www.microsoft.com)
+  VLESS Port: 443 (REALITY, borrowing www.bing.com)
   SS Port:    8443
   Username:   default
   Password:   xxxxxxxxxxxxxxxx
@@ -168,7 +168,7 @@ The script tests the login, starts the `xray-tunnel` service, fetches a page thr
 Import the URI from `./xcp.sh user ls` or scan the QR code from `./xcp.sh user add`. v2rayNG, Hiddify, Streisand, NekoBox, v2rayN and sing-box all read it directly:
 
 ```
-vless://<uuid>@SERVER_IP:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.microsoft.com&fp=chrome&pbk=<public key>&sid=<shortId>&spx=%2F#name
+vless://<uuid>@SERVER_IP:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.bing.com&fp=chrome&pbk=<public key>&sid=<shortId>&spx=%2F#name
 ```
 
 To enter it by hand:
@@ -185,7 +185,7 @@ To enter it by hand:
 | PublicKey   | from `user ls`     |
 | ShortId     | from `user ls`     |
 
-Clients reach the server by IP, and the SNI carries a domain someone else owns. REALITY authenticates with a timestamp, so keep both server clocks accurate — `chrony` or `systemd-timesyncd` handles it, and roughly 90 seconds of drift is the limit.
+Clients reach the server by IP, and the SNI carries a domain someone else owns. If clients fail to connect while the server looks healthy, change that domain — `./xcp.sh config dest` switches it, and `./xcp.sh test` reports whether a client completes the handshake through it. REALITY authenticates with a timestamp, so keep both server clocks accurate — `chrony` or `systemd-timesyncd` handles it, and roughly 90 seconds of drift is the limit.
 
 ### Shadowsocks
 

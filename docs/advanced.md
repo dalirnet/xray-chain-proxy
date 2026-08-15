@@ -234,7 +234,7 @@ Two names are involved and only one of them is yours to arrange — neither need
 - Your server is reached by **bare IP**, which is what the share URI carries.
 
 ```
-vless://<uuid>@203.0.113.9:443?...&sni=www.microsoft.com&...
+vless://<uuid>@203.0.113.9:443?...&sni=www.bing.com&...
               ↑ your IP              ↑ the borrowed domain
 ```
 
@@ -254,7 +254,7 @@ Setup checks the domain with `openssl s_client` and accepts it when it answers T
 Check a candidate by hand:
 
 ```bash
-openssl s_client -connect www.microsoft.com:443 -tls1_3 -alpn h2 </dev/null 2>&1 \
+openssl s_client -connect www.bing.com:443 -tls1_3 -alpn h2 </dev/null 2>&1 \
   | grep -E 'Protocol|ALPN'
 ```
 
@@ -339,6 +339,25 @@ On the GATEWAY, confirm forwarding is allowed in `/etc/ssh/sshd_config`:
 ```
 AllowTcpForwarding yes
 ```
+
+### VLESS clients cannot connect
+
+The server looks healthy, the port is open, and clients still fail — often looking like wrong credentials. The dest is the first thing to check.
+
+REALITY borrows the dest's handshake and hands it to the client. A domain can answer TLS 1.3 with HTTP/2 and still return a hello REALITY cannot reuse, in which case every client is dropped before its uuid is read. Nothing in the server log looks alarming, and the client just sees the connection end.
+
+```bash
+./xcp.sh test          # reports whether a client completes the handshake
+```
+
+A failure there names the dest. Switch it and re-test:
+
+```bash
+./xcp.sh config dest   # try www.bing.com, dl.google.com, cdn.jsdelivr.net, www.cloudflare.com
+./xcp.sh user ls       # the SNI changed, so reimport the URIs
+```
+
+Two other things worth confirming while you are here: the share URI matches the current keys, since `setup` issues new ones each run, and both clocks are accurate, since REALITY authenticates with a timestamp and drifts out past roughly 90 seconds.
 
 ### DNS returns nothing
 

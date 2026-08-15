@@ -45,7 +45,7 @@
 #   script.sh logs [-f] [n]     - Show logs (-f to follow)
 #   script.sh test              - Test proxy and speed
 #   script.sh config ls         - Show current config
-#   script.sh config set        - Set log level, ports or DNS resolver
+#   script.sh config set        - Set log level, ports, DNS resolver or REALITY dest
 #   script.sh dns ls            - Show the resolver and who may use it
 #   script.sh dns add [ip]      - Allow a client to use this server for DNS
 #   script.sh dns rm [ip]       - Revoke a client
@@ -116,8 +116,17 @@ readonly LOCAL_SOCKS_PORT=11080
 # recognise to the real dest site, so a prober gets a genuine TLS 1.3 answer with
 # a valid certificate chain - which only reads as ordinary on the port HTTPS uses.
 readonly DEFAULT_VLESS_PORT=443
-readonly DEFAULT_REALITY_DEST="www.microsoft.com"
+# The dest lends REALITY its handshake, so it has to chain with what current
+# clients send. www.microsoft.com answers TLS 1.3 with HTTP/2 yet returns a
+# server hello REALITY cannot reuse - measured on Xray 26, the handshake never
+# completes and every client is dropped before its uuid is read. Swap a dest
+# with `config dest`; reality_verify_chain is what tells them apart.
+readonly DEFAULT_REALITY_DEST="www.bing.com"
+readonly REALITY_DEST_ALTERNATIVES="www.bing.com, dl.google.com, cdn.jsdelivr.net, www.cloudflare.com"
 readonly REALITY_FLOW="xtls-rprx-vision"
+
+# Loopback port the REALITY handshake check listens on, held only while it runs
+readonly REALITY_PROBE_PORT=11081
 
 # Port 80 answers with the caller's own IP, so `curl http://server` reports the
 # address a connection arrives from. systemd owns the socket and hands each
@@ -872,6 +881,94 @@ prompt_reality_dest() {
     done
 }
 
+# TLS 1.3 and HTTP/2 show the dest answers like the site REALITY wants to borrow.
+# Whether a client actually completes the borrowed handshake is a separate
+# question, and only a real connection answers it - a dest that fails here drops
+# clients before their uuid is read, and the client sees an EOF that reads like
+# bad credentials.
+#
+# Returns 0 when a client made the round trip, 1 when it failed, and 2 when the
+# check could not run. Reporting success for a check that never ran would be
+# worse than saying nothing.
+reality_verify_chain() {
+    local config="${1:-$XRAY_CONFIG}"
+
+    command -v curl &>/dev/null || return 2
+    [[ -x "$XRAY_BIN" && -f "$config" ]] || return 2
+
+    local port dest pub sid uuid
+    port=$(jq -r '.xcp.reality.port // empty' "$config")
+    dest=$(jq -r '.xcp.reality.dest // empty' "$config")
+    pub=$(jq -r '.xcp.reality.publicKey // empty' "$config")
+    sid=$(jq -r '.xcp.reality.shortId // empty' "$config")
+    uuid=$(jq -r '[.inbounds[]? | select(.tag == "vless-in") | .settings.clients[0].id][0] // empty' "$config" 2>/dev/null)
+
+    [[ -n "$port" && -n "$dest" && -n "$pub" && -n "$uuid" ]] || return 2
+    port_taken "$REALITY_PROBE_PORT" && return 2
+
+    # Xray picks the config format from the file extension, so the probe needs a
+    # .json name - it refuses to start on a bare mktemp file
+    local dir probe
+    dir=$(mktemp -d)
+    probe="${dir}/probe.json"
+
+    jq -nc --arg uuid "$uuid" --arg dest "$dest" --arg pub "$pub" --arg sid "$sid" \
+        --arg flow "$REALITY_FLOW" --argjson port "$port" \
+        --argjson listen "$REALITY_PROBE_PORT" '{
+            log: {loglevel: "none"},
+            inbounds: [{tag: "probe", port: $listen, listen: "127.0.0.1",
+                protocol: "http", settings: {}}],
+            outbounds: [{
+                protocol: "vless",
+                settings: {vnext: [{address: "127.0.0.1", port: $port,
+                    users: [{id: $uuid, encryption: "none", flow: $flow}]}]},
+                streamSettings: {network: "tcp", security: "reality",
+                    realitySettings: {serverName: $dest, fingerprint: "chrome",
+                        publicKey: $pub, shortId: $sid, spiderX: "/"}}
+            }]
+        }' > "$probe"
+
+    "$XRAY_BIN" run -c "$probe" &>/dev/null &
+    local pid=$! rc=1 i
+
+    # Wait for the probe to listen rather than guessing at a fixed delay
+    for i in {1..10}; do
+        (exec 3<>"/dev/tcp/127.0.0.1/${REALITY_PROBE_PORT}") 2>/dev/null && break
+        sleep 1
+    done
+
+    # The answer has to be an address, not just a successful exit. curl reports
+    # success for any HTTP response it receives, including the error page the
+    # proxy returns when the outbound never connected - which would pass a
+    # completely broken inbound.
+    local answer
+    answer=$(curl -s --max-time 10 -x "http://127.0.0.1:${REALITY_PROBE_PORT}" \
+        "http://ip-api.com/line/?fields=query" 2>/dev/null || true)
+    [[ "$answer" =~ ^[0-9]{1,3}(\.[0-9]{1,3}){3}$ ]] && rc=0
+
+    kill "$pid" &>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+    rm -rf "$dir"
+
+    return "$rc"
+}
+
+# Report the handshake check, naming the dest as the thing to change
+reality_report_chain() {
+    local dest="$1" rc=0
+
+    reality_verify_chain || rc=$?
+
+    case "$rc" in
+        0) log_success "REALITY handshake verified through ${dest}" ;;
+        2) log_info "Skipped the REALITY handshake check" ;;
+        *) log_warn "${dest} answers TLS, and a client still failed to finish the handshake"
+           log_warn "Clients are dropped before authentication - pick another dest with '${SCRIPT_NAME} config dest'"
+           log_warn "Known good: ${REALITY_DEST_ALTERNATIVES}"
+           return 1 ;;
+    esac
+}
+
 # Collect everything the REALITY inbound and its share URIs need, as one JSON
 # object the config generators take verbatim
 reality_settings() {
@@ -1578,6 +1675,8 @@ setup_gateway() {
     sleep 2
     systemctl is-active xray &>/dev/null || log_error "Xray failed to start"
 
+    reality_report_chain "$REALITY_DEST" || true
+
     local IP=$(get_public_ip)
     local SSH_PORT=$(get_ssh_port)
 
@@ -1652,6 +1751,8 @@ setup_edge() {
     systemctl restart xray
     sleep 2
     systemctl is-active xray &>/dev/null || log_error "Xray failed to start"
+
+    reality_report_chain "$REALITY_DEST" || true
 
     local IP=$(get_public_ip)
 
@@ -1984,21 +2085,54 @@ config_dns() {
     log_success "DNS resolver set to $DNS_SERVER"
 }
 
+# Change the site REALITY borrows its handshake from. The SNI in every share URI
+# is this name, so the URIs are reissued and clients have to reimport them.
+config_dest() {
+    check_root
+    require_config
+
+    local current=$(jq -r '.xcp.reality.dest // empty' "$XRAY_CONFIG")
+    [[ -n "$current" ]] || log_error "No REALITY inbound in the config"
+
+    echo -e "\n${BOLD}REALITY Dest${NC}\n"
+    echo -e "Current: ${YELLOW}${current}${NC}\n"
+
+    local DEST
+    prompt_reality_dest DEST
+
+    jq --arg dest "$DEST" --arg target "${DEST}:443" \
+        '.xcp.reality.dest = $dest
+         | .inbounds |= map(if .tag == "vless-in"
+             then .streamSettings.realitySettings.dest = $target
+                | .streamSettings.realitySettings.serverNames = [$dest]
+             else . end)' \
+        "$XRAY_CONFIG" | config_write
+
+    apply_config
+
+    reality_report_chain "$DEST" || true
+
+    log_success "REALITY dest set to ${DEST}"
+    log_warn "The share URIs changed - run '${SCRIPT_NAME} user ls' and reimport them"
+}
+
 # Config set submenu
 config_set() {
     echo -e "\n${BOLD}Set Config:${NC}\n"
     echo "  1) loglevel - Set log level"
     echo "  2) port     - Change listen port"
     echo "  3) dns      - Change DNS resolver"
+    echo "  4) dest     - Change REALITY dest"
     echo
 
     local choice
-    read -rp "Select option (1-3): " choice
+    read -rp "Select option (1-4): " choice
 
     case "$choice" in
         1|loglevel) config_loglevel ;;
         2|port)     config_port ;;
         3|dns)      config_dns ;;
+        4|dest)     config_dest ;;
         *)          log_error "Invalid option" ;;
     esac
 }
@@ -2011,7 +2145,8 @@ config_cmd() {
         loglevel) config_loglevel ;;
         port)     config_port ;;
         dns)      config_dns ;;
-        *)        echo -e "\nUsage: $SCRIPT_NAME config <ls|set|loglevel|port|dns>\n" ;;
+        dest)     config_dest ;;
+        *)        echo -e "\nUsage: $SCRIPT_NAME config <ls|set|loglevel|port|dns|dest>\n" ;;
     esac
 }
 
@@ -2655,6 +2790,23 @@ test_proxy() {
         return 1
     fi
 
+    # The VLESS inbound, handshake and all - a dest a client cannot complete the
+    # handshake through shows up here and nowhere else
+    local reality_dest=$(jq -r '.xcp.reality.dest // empty' "$XRAY_CONFIG")
+    if [[ -n "$reality_dest" ]]; then
+        echo -e "\n${BOLD}Testing REALITY...${NC}\n"
+
+        local reality_rc=0
+        reality_verify_chain || reality_rc=$?
+
+        case "$reality_rc" in
+            0) echo -e "${GREEN}OK${NC} - Handshake borrowed from ${YELLOW}${reality_dest}${NC}" ;;
+            2) echo -e "${CYAN}Skipped${NC} - the handshake check could not run here" ;;
+            *) echo -e "${RED}Failed${NC} - a client could not finish the handshake through ${YELLOW}${reality_dest}${NC}"
+               echo -e "         Change it with '${SCRIPT_NAME} config dest' - known good: ${REALITY_DEST_ALTERNATIVES}" ;;
+        esac
+    fi
+
     # DNS service on port 53
     if command -v dig &>/dev/null; then
         echo -e "\n${BOLD}Testing DNS...${NC}\n"
@@ -2865,8 +3017,8 @@ Commands:
   test              Test proxy and speed
 
   config ls         Show current config
-  config set        Set log level, ports or DNS resolver
-                    (or go straight there: config loglevel|port|dns)
+  config set        Set log level, ports, DNS resolver or REALITY dest
+                    (or go straight there: config loglevel|port|dns|dest)
 
   dns ls            Show the resolver and who may use it
   dns add [ip]      Allow a client to use this server for DNS

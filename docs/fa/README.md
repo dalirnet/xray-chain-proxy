@@ -117,7 +117,7 @@ chmod +x xcp.sh
 - پورت VLESS (REALITY) (پیش‌فرض: 443)
 - پورت Shadowsocks (پیش‌فرض: 8443)
 - ریزالور DNS (پیش‌فرض: 1.1.1.1)
-- دامنه dest برای REALITY (پیش‌فرض: `www.microsoft.com`) — پیش از پذیرش، پشتیبانی از TLS 1.3 و HTTP/2 آن بررسی می‌شود
+- دامنه dest برای REALITY (پیش‌فرض: `www.bing.com`) — پیش از پذیرش، پشتیبانی از TLS 1.3 و HTTP/2 آن بررسی می‌شود
 - رمز SSH تونل — با زدن Enter یک رمز ۳۲ کاراکتری ساخته می‌شود
 
 اسکریپت کاربر `xcp` را با همان رمز می‌سازد، آن را در `sshd_config` مجاز می‌کند و هر چیزی که EDGE لازم دارد را نمایش می‌دهد:
@@ -132,7 +132,7 @@ Use on EDGE server (setup edge):
   SSH Pass:   kQ8vR2mZ...
 
 Direct client access:
-  VLESS Port: 443 (REALITY, borrowing www.microsoft.com)
+  VLESS Port: 443 (REALITY, borrowing www.bing.com)
   SS Port:    8443
   Username:   default
   Password:   xxxxxxxxxxxxxxxx
@@ -168,7 +168,7 @@ Loopback only (127.0.0.1):
 لینک اشتراک را از `./xcp.sh user ls` وارد کنید یا QR کد `./xcp.sh user add` را اسکن کنید. برنامه‌های v2rayNG، Hiddify، Streisand، NekoBox، v2rayN و sing-box آن را مستقیم می‌خوانند:
 
 ```
-vless://<uuid>@SERVER_IP:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.microsoft.com&fp=chrome&pbk=<public key>&sid=<shortId>&spx=%2F#name
+vless://<uuid>@SERVER_IP:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.bing.com&fp=chrome&pbk=<public key>&sid=<shortId>&spx=%2F#name
 ```
 
 برای وارد کردن دستی:
@@ -185,7 +185,7 @@ vless://<uuid>@SERVER_IP:443?encryption=none&security=reality&type=tcp&flow=xtls
 | PublicKey   | از `user ls`          |
 | ShortId     | از `user ls`          |
 
-کلاینت‌ها با آی‌پی به سرور می‌رسند و SNI نام دامنه‌ای را حمل می‌کند که متعلق به شخص دیگری است. احراز هویت REALITY بر پایه زمان است، پس ساعت هر دو سرور را دقیق نگه دارید — `chrony` یا `systemd-timesyncd` این کار را می‌کند و حدود ۹۰ ثانیه اختلاف مرز آن است.
+کلاینت‌ها با آی‌پی به سرور می‌رسند و SNI نام دامنه‌ای را حمل می‌کند که متعلق به شخص دیگری است. اگر سرور سالم است ولی کلاینت‌ها وصل نمی‌شوند، همان دامنه را عوض کنید — `./xcp.sh config dest` آن را تغییر می‌دهد و `./xcp.sh test` گزارش می‌کند که کلاینت دست‌دادن را کامل می‌کند یا نه. احراز هویت REALITY بر پایه زمان است، پس ساعت هر دو سرور را دقیق نگه دارید — `chrony` یا `systemd-timesyncd` این کار را می‌کند و حدود ۹۰ ثانیه اختلاف مرز آن است.
 
 ### Shadowsocks
 

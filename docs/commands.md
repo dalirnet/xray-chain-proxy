@@ -12,7 +12,7 @@ Install and configure as exit node.
 
 Installs Xray, applies the BBR network tuning, then prompts for ports and a DNS resolver.
 
-Next comes REALITY: it asks for a `dest` domain (default `www.microsoft.com`), checks that the domain answers with TLS 1.3 and HTTP/2, and generates the x25519 keypair and `shortId`.
+Next comes REALITY: it asks for a `dest` domain (default `www.bing.com`), checks that the domain answers with TLS 1.3 and HTTP/2, and generates the x25519 keypair and `shortId`.
 
 Finally it sets up SSH access for the chain — the `xcp` tunnel user, its password (generated when left empty), and a `Match User xcp` block in `sshd_config` — creates the initial `default` user, and starts the port 80 IP responder. Prints the host, SSH port, user and password that edge setup asks for.
 
@@ -92,7 +92,7 @@ Output:
 
 ```
 Server: 5.6.7.8
-VLESS: 443 (REALITY → www.microsoft.com)
+VLESS: 443 (REALITY → www.bing.com)
 Shadowsocks: 8443
 
 Accounts:
@@ -197,7 +197,7 @@ Config:
   Type:       edge
   Version:    3.x
   VLESS Port: 443
-  REALITY:    www.microsoft.com
+  REALITY:    www.bing.com
   SS Port:    8443
   SOCKS Port: 11080 (loopback)
   DNS Port:   53 (loopback)
@@ -219,6 +219,7 @@ Options:
 1. `loglevel` - Set log level (none/warning/info/debug)
 2. `port` - Change listen ports
 3. `dns` - Change the DNS resolver
+4. `dest` - Change the site REALITY borrows its handshake from
 
 Each is also reachable directly, skipping the menu:
 
@@ -226,7 +227,22 @@ Each is also reachable directly, skipping the menu:
 ./xcp.sh config loglevel
 ./xcp.sh config port
 ./xcp.sh config dns
+./xcp.sh config dest
 ```
+
+### `config dest`
+
+Change the site REALITY borrows its handshake from.
+
+```bash
+./xcp.sh config dest
+```
+
+Answering TLS 1.3 with HTTP/2 makes a domain a candidate; completing a handshake a client can use makes it a working dest. Setup checks the first at the prompt and the second against the running inbound, so a domain that looks right and still drops clients is reported before you hand out URIs.
+
+The SNI in every share URI is this name, so changing it reissues the URIs — run `user ls` and reimport them.
+
+Known good: `www.bing.com`, `dl.google.com`, `cdn.jsdelivr.net`, `www.cloudflare.com`.
 
 The DNS menu offers Cloudflare, Google and Quad9, two DoH endpoints, or a custom address. On an EDGE the choice is rewritten to `tcp://` so queries fit through the tunnel; a DoH URL is kept as typed. The change restarts Xray.
 
