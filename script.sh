@@ -263,6 +263,17 @@ validate_dns() {
 
 # --- Utilities ---
 
+# A UUID for a VLESS client. The kernel exposes one directly, so this avoids
+# shelling out to the xray binary - one less thing that has to be present and
+# working before a user can be added.
+generate_uuid() {
+    if [[ -r /proc/sys/kernel/random/uuid ]]; then
+        cat /proc/sys/kernel/random/uuid
+    else
+        "$XRAY_BIN" uuid
+    fi
+}
+
 # Generate random password
 generate_password() {
     local len="${1:-16}"
@@ -1828,7 +1839,9 @@ user_add() {
 
     local SS_PORT=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
     local REALITY=$(jq -c '.xcp.reality // null' "$XRAY_CONFIG")
-    local UUID=$("$XRAY_BIN" uuid)
+    local UUID=$(generate_uuid)
+
+    [[ "$UUID" =~ ^[0-9a-fA-F-]{36}$ ]] || log_error "Could not generate a client uuid"
 
     # One account, both protocols: the password authenticates Shadowsocks and
     # the uuid authenticates VLESS. The uuid is stored on the ss-in client so a
