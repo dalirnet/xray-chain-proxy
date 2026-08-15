@@ -4,7 +4,8 @@
 #
 # Dependencies: asciinema, agg, imagemagick
 #
-# Usage: ./mockup.sh
+# Usage: ./mockup.sh                       # record all demos
+#        ./mockup.sh setup-edge status    # record only the named demos
 #
 # Output:
 #   setup-gateway.gif
@@ -13,6 +14,8 @@
 #   status.gif
 #   stats.gif
 #   test.gif
+#   link-ls.gif
+#   dns-ls.gif
 #   rule-add.gif
 #
 
@@ -37,10 +40,13 @@ QR='█████████████████████████�
 █████████████████████████████'
 
 GW_IP="104.28.55.73"; EDGE_IP="185.92.36.110"
-SS_PORT="443"; HTTP_PORT="80"; SOCKS_PORT="1080"
+SS_PORT="8388"; LOCAL_SOCKS_PORT="11080"; DNS_PORT="53"
+VLESS_PORT="443"; REALITY_DEST="www.microsoft.com"
+SSH_USER="xcp"; SSH_PASS="kQ8vR2mZpL4xN7wD"; DNS_SERVER="1.1.1.1"
 DEMO_USER="john"
 DEMO_PASS="bT5sD1fG8hY3oK7w"
-DEMO_URI="ss://YWVzLTI1Ni1nY206YlQ1c0QxZkc4aFkzb0s3dw==@185.92.36.110:443#john"
+DEMO_URI="ss://YWVzLTI1Ni1nY206YlQ1c0QxZkc4aFkzb0s3dw==@185.92.36.110:8388#john"
+DEMO_VLESS="vless://8f3a1c2e-5b7d-4e91-a6f0-2d84bc9e1357@185.92.36.110:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.microsoft.com&fp=chrome&pbk=T9xKp2mVqL8nR4wZ3cJ7yB5dF1hG6sA0eN2uX8vC4kM&sid=a1b2c3d4e5f60718&spx=%2F#john"
 
 PROMPT="${GREEN}root@ubuntu${NC}:${CYAN}~${NC}# "
 
@@ -82,14 +88,14 @@ wrap_window() {
             -geometry "+10+$((TITLE_HEIGHT + 10))" \
             -composite \
             "$TMPDIR/out-$(printf '%04d' $i).png"
-        ((i++))
+        i=$((i + 1))
     done
 
     local DELAY_ARGS="" i=0
     while read -r delay; do
         [[ -z "$delay" ]] && delay=10
         DELAY_ARGS="$DELAY_ARGS -delay $delay $TMPDIR/out-$(printf '%04d' $i).png"
-        ((i++))
+        i=$((i + 1))
     done < "$TMPDIR/delays.txt"
 
     eval magick $DELAY_ARGS -loop 0 "$OUTPUT"
@@ -154,19 +160,45 @@ run_setup_gateway() {
 
     echo -e "\n${BOLD}>>> Configure Ports${NC}"
     sleep 0.2
-    echo -n "Shadowsocks port [443]: "; prompt_default
-    echo -n "HTTP proxy port [80]: "; prompt_default
-    echo -n "SOCKS5 proxy port [1080]: "; prompt_default
+    echo -n "VLESS (REALITY) port [443]: "; prompt_default
+    echo -n "Shadowsocks port [8388]: "; prompt_default
+    echo -n "DNS resolver [1.1.1.1]: "; prompt_default
     sleep 0.3
+
+    echo -e "\n${BOLD}>>> REALITY${NC}"
+    sleep 0.2
+    echo -n "REALITY dest domain (default: ${REALITY_DEST}): "; prompt_default
+    sleep 0.4
+    echo -e "${GREEN}[OK]${NC} ${REALITY_DEST} serves TLS 1.3 with HTTP/2"
+    sleep 0.2
+    echo -e "${GREEN}[OK]${NC} REALITY keys generated, borrowing ${REALITY_DEST}"
+    sleep 0.3
+
+    echo -e "\n${BOLD}>>> SSH Access${NC}"
+    sleep 0.2
+    echo -n "Tunnel SSH password (empty=generate): "; prompt_default
+    echo -e "${CYAN}[INFO]${NC} Generated: ${SSH_PASS}"
+    sleep 0.3
+    echo -e "${GREEN}[OK]${NC} SSH user '${SSH_USER}' created"
+    sleep 0.3
+    echo -e "${GREEN}[OK]${NC} sshd accepts tunnel logins from '${SSH_USER}'"
+    sleep 0.4
 
     echo -e "\n${GREEN}GATEWAY Ready!${NC}"
     sleep 0.2
-    echo -e "\n${BOLD}Use on EDGE server:${NC}"
-    echo -e "  IP:         ${YELLOW}${GW_IP}${NC}"
+    echo -e "\n${BOLD}Use on EDGE server (setup edge):${NC}"
+    echo -e "  Gateway:    ${YELLOW}${GW_IP}${NC}"
+    echo -e "  SSH Port:   ${YELLOW}22${NC}"
+    echo -e "  SSH User:   ${YELLOW}${SSH_USER}${NC}"
+    echo -e "  SSH Pass:   ${YELLOW}${SSH_PASS}${NC}"
+    echo -e "\n${BOLD}Direct client access:${NC}"
+    echo -e "  VLESS Port: ${YELLOW}${VLESS_PORT}${NC} (REALITY, borrowing ${REALITY_DEST})"
     echo -e "  SS Port:    ${YELLOW}${SS_PORT}${NC}"
-    echo -e "  HTTP Port:  ${YELLOW}${HTTP_PORT}${NC}"
-    echo -e "  SOCKS Port: ${YELLOW}${SOCKS_PORT}${NC}"
+    echo -e "  Username:   ${YELLOW}default${NC}"
     echo -e "  Password:   ${YELLOW}Rk7xPm2wQ4nLs9Fj${NC}"
+    echo -e "\n${BOLD}Loopback only (127.0.0.1):${NC}"
+    echo -e "  SOCKS Port: ${YELLOW}${LOCAL_SOCKS_PORT}${NC} (diagnostics)"
+    echo -e "  DNS Port:   ${YELLOW}${DNS_PORT}${NC} (${DNS_SERVER})"
     sleep 0.1
 }
 
@@ -193,21 +225,40 @@ run_setup_edge() {
 
     echo -e "\n${BOLD}>>> Gateway Details${NC}"
     sleep 0.2
-    echo -n "Gateway IP: "; prompt_type "$GW_IP"
-    echo -n "Gateway port [443]: "; prompt_default
-    echo -n "Gateway password: "; prompt_type "********"
+    echo -n "Gateway host: "; prompt_type "$GW_IP"
+    echo -n "Gateway SSH port [22]: "; prompt_default
+    echo -n "Gateway SSH user [xcp]: "; prompt_default
+    echo -n "Gateway SSH password: "; prompt_default
     sleep 0.2
 
     echo -e "\n${BOLD}>>> Edge Settings${NC}"
     sleep 0.2
-    echo -n "Shadowsocks port [443]: "; prompt_default
-    echo -n "HTTP proxy port [80]: "; prompt_default
-    echo -n "SOCKS5 proxy port [1080]: "; prompt_default
+    echo -n "VLESS (REALITY) port [443]: "; prompt_default
+    echo -n "Shadowsocks port [8388]: "; prompt_default
+    echo -n "DNS resolver [1.1.1.1]: "; prompt_default
+    sleep 0.3
+
+    echo -e "\n${BOLD}>>> REALITY${NC}"
+    sleep 0.2
+    echo -n "REALITY dest domain (default: ${REALITY_DEST}): "; prompt_default
+    sleep 0.4
+    echo -e "${GREEN}[OK]${NC} ${REALITY_DEST} serves TLS 1.3 with HTTP/2"
+    sleep 0.2
+    echo -e "${GREEN}[OK]${NC} REALITY keys generated, borrowing ${REALITY_DEST}"
+    sleep 0.3
+
+    echo -e "\n${BOLD}>>> SSH Tunnel${NC}"
+    sleep 0.4
+    echo -e "${GREEN}[OK]${NC} Password login to ${SSH_USER}@${GW_IP} works"
+    sleep 0.4
+    echo -e "${GREEN}[OK]${NC} Tunnel up on 127.0.0.1:10080"
+    sleep 0.5
+    echo -e "${GREEN}[OK]${NC} Gateway reachable through the tunnel"
     sleep 0.3
 
     echo -e "\n${GREEN}EDGE Ready!${NC}"
     sleep 0.2
-    echo -e "\n${BOLD}Chain:${NC} Client -> ${EDGE_IP} -> ${GW_IP}:${SS_PORT} -> Internet"
+    echo -e "\n${BOLD}Chain:${NC} Client -> ${EDGE_IP} -> ssh://${GW_IP}:22 -> Internet"
     sleep 0.1
 }
 
@@ -224,13 +275,14 @@ run_user_add() {
     echo -e "\n${GREEN}Account '${DEMO_USER}' Added${NC}"
     sleep 0.2
     echo -e "  IP:         ${YELLOW}${EDGE_IP}${NC}"
+    echo -e "  VLESS Port: ${YELLOW}${VLESS_PORT}${NC}"
     echo -e "  SS Port:    ${YELLOW}${SS_PORT}${NC}"
-    echo -e "  HTTP Port:  ${YELLOW}${HTTP_PORT}${NC}"
-    echo -e "  SOCKS Port: ${YELLOW}${SOCKS_PORT}${NC}"
     echo -e "  Username:   ${YELLOW}${DEMO_USER}${NC}"
     echo -e "  Password:   ${YELLOW}********${NC}\n"
     sleep 0.8
     echo "$QR"
+    echo ""
+    echo "VLESS URI: ${DEMO_VLESS}"
     echo ""
     echo "SS URI: ${DEMO_URI}"
     sleep 0.1
@@ -244,8 +296,17 @@ run_status() {
 
     echo -e "\n${BOLD}Status:${NC}\n"
     sleep 0.3
-    echo -e "${GREEN}● Running${NC}"
+    echo -e "Xray:   ${GREEN}● Running${NC}"
     echo "Version: 25.1.30"
+    sleep 0.2
+    echo -e "Tunnel: ${GREEN}● Running${NC}"
+    sleep 0.2
+    echo -e "  RTT/jitter:  ${YELLOW}47.3/2.1 ms${NC}"
+    echo -e "  Retrans:     ${YELLOW}0/1841${NC}"
+    sleep 0.2
+    echo -e "Health: ${GREEN}● Checking every 60s${NC}"
+    sleep 0.2
+    echo -e "Echo:   ${GREEN}● Answering on port 80${NC}"
     sleep 0.1
 }
 
@@ -277,9 +338,19 @@ run_test() {
     type_cmd "./xcp.sh test"; sleep 0.3; printf '\n'
     sleep 0.3
 
+    echo -e "\n${BOLD}Testing tunnel...${NC}\n"
+    sleep 0.5
+    echo -e "${GREEN}OK${NC} - SSH tunnel to ${YELLOW}${GW_IP}${NC} is up"
+    sleep 0.3
+
     echo -e "\n${BOLD}Testing proxy...${NC}\n"
     sleep 0.6
     echo -e "${GREEN}OK${NC} - Exit IP: ${YELLOW}${GW_IP}${NC}"
+    sleep 0.3
+
+    echo -e "\n${BOLD}Testing DNS...${NC}\n"
+    sleep 0.5
+    echo -e "${GREEN}OK${NC} - Resolver ${YELLOW}${DNS_SERVER}${NC} answering on port ${DNS_PORT}"
     sleep 0.3
 
     echo -e "\n${BOLD}Speed Test:${NC}\n"
@@ -289,6 +360,46 @@ run_test() {
     echo -e "  Download: ${YELLOW}87.32 Mbit/s${NC}"
     sleep 0.2
     echo -e "  Upload:   ${YELLOW}41.58 Mbit/s${NC}"
+    sleep 0.1
+}
+
+run_link_ls() {
+    echo -ne "$PROMPT"
+    sleep 0.5
+    type_cmd "./xcp.sh link ls"; sleep 0.3; printf '\n'
+    sleep 0.3
+
+    echo -e "\n${BOLD}Gateway Link:${NC}\n"
+    sleep 0.3
+    echo -e "  Protocol:   ${YELLOW}ssh${NC}"
+    sleep 0.2
+    echo -e "  Gateway:    ${YELLOW}${SSH_USER}@${GW_IP}:22${NC}"
+    sleep 0.2
+    echo -e "  Auth:       ${YELLOW}password${NC}"
+    sleep 0.2
+    echo -e "  Forward:    ${YELLOW}127.0.0.1:10080${NC} (loopback only)"
+    sleep 0.2
+    echo -e "  Tunnel:     ${GREEN}● Running${NC}"
+    sleep 0.1
+}
+
+run_dns_ls() {
+    echo -ne "$PROMPT"
+    sleep 0.5
+    type_cmd "./xcp.sh dns ls"; sleep 0.3; printf '\n'
+    sleep 0.3
+
+    echo -e "\n${BOLD}DNS:${NC}\n"
+    sleep 0.3
+    echo -e "  Resolver: ${YELLOW}${DNS_SERVER}${NC}  (change with 'xcp.sh config set')"
+    sleep 0.2
+    echo -e "  Reachable: ${YELLOW}0.0.0.0:${DNS_PORT}${NC}, allowed sources only"
+    sleep 0.3
+    echo -e "\n${BOLD}Allowed:${NC}\n"
+    sleep 0.2
+    echo -e "  ${CYAN}1)${NC} 203.0.113.9"
+    sleep 0.2
+    echo -e "  ${CYAN}2)${NC} 198.51.100.0/24"
     sleep 0.1
 }
 
@@ -302,8 +413,8 @@ run_rule_add() {
     sleep 0.3
 
     echo -e "${BOLD}Available outbounds:${NC}"
-    echo "  proxy   - Through gateway proxy"
-    echo "  direct  - Direct connection (bypass proxy)"
+    echo "  proxy   - Through the gateway"
+    echo "  direct  - Direct connection (bypass the gateway)"
     echo "  blocked - Block traffic"
     echo ""
     sleep 0.3
@@ -332,15 +443,37 @@ case "${1:-}" in
     __run_status)        run_status ;;
     __run_stats)         run_stats ;;
     __run_test)          run_test ;;
+    __run_link-ls)       run_link_ls ;;
+    __run_dns-ls)        run_dns_ls ;;
     __run_rule-add)      run_rule_add ;;
     *)
-        record_demo "setup-gateway" 26
-        record_demo "setup-edge" 26
-        record_demo "user-add" 26
-        record_demo "status" 8
-        record_demo "stats" 12
-        record_demo "test" 12
-        record_demo "rule-add" 20
+        # Heights must clear each demo's output or the recording scrolls and
+        # the top of the frame is lost. Check with:
+        #   ./mockup.sh __run_<name> | wc -l
+        DEMOS=(
+            "setup-gateway:47"
+            "setup-edge:38"
+            "user-add:29"
+            "status:13"
+            "stats:12"
+            "test:20"
+            "link-ls:11"
+            "dns-ls:12"
+            "rule-add:20"
+        )
+
+        for entry in "${DEMOS[@]}"; do
+            name="${entry%%:*}"; rows="${entry##*:}"
+
+            # No args: record everything. Otherwise only the named demos.
+            if [[ $# -gt 0 ]]; then
+                match=0
+                for want in "$@"; do [[ "$want" == "$name" ]] && match=1; done
+                [[ $match -eq 1 ]] || continue
+            fi
+
+            record_demo "$name" "$rows"
+        done
         echo ""
         echo "All done!"
         ;;

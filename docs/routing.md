@@ -13,11 +13,14 @@ Routing rules allow you to control how traffic flows through your proxy chain. Y
 
 ### Edge Server
 
-| Outbound  | Description                    | Use Case                     |
-|-----------|--------------------------------|------------------------------|
-| `proxy`   | Route through gateway proxy    | Censored content, privacy    |
-| `direct`  | Bypass proxy, connect directly | Streaming, local sites       |
-| `blocked` | Block traffic at entry point   | Ads, malware before gateway  |
+| Outbound  | Description                       | Use Case                      |
+|-----------|-----------------------------------|-------------------------------|
+| `proxy`   | Route through the SSH tunnel      | Censored content, privacy     |
+| `direct`  | Leave from the edge itself        | Streaming, local sites        |
+| `blocked` | Block traffic at entry point      | Ads, malware before the chain |
+| `dns-out` | Built-in, answers DNS over TCP    | Managed automatically         |
+
+> `dns-out` is added by the script and should not be used in custom rules.
 
 ## Rule Types
 
@@ -179,17 +182,23 @@ Rules are evaluated in order. First matching rule wins.
 ### Gateway
 
 1. **Built-in API rule** - Routes Xray API traffic (127.0.0.1:10085)
-2. **Built-in private IP block** - Blocks private IPs (`geoip:private`)
-3. **Custom rules** - Your added rules (evaluated top to bottom)
-4. **Default** - Remaining traffic routes to `direct` (first outbound)
+2. **Built-in DNS rule** - Routes the `dns-in` inbound to `dns-out`
+3. **Built-in private IP block** - Blocks private IPs (`geoip:private`)
+4. **Custom rules** - Your added rules (evaluated top to bottom)
+5. **Default** - Remaining traffic routes to `direct` (first outbound)
 
 ### Edge
 
 1. **Built-in API rule** - Routes Xray API traffic (127.0.0.1:10085)
-2. **Custom rules** - Your added rules (evaluated top to bottom)
-3. **Built-in client rule** - Routes all client traffic to `proxy`
+2. **Built-in DNS rule** - Routes the `dns-in` inbound to `dns-out`
+3. **Built-in DNS port rule** - Routes UDP/53 to `dns-out` (resolved over TCP through the chain)
+4. **Custom rules** - Your added rules (evaluated top to bottom)
+5. **Built-in UDP rule** - Blocks remaining UDP (the SSH tunnel is TCP-only)
+6. **Built-in client rule** - Routes client traffic (`vless-in`, `ss-in`, `local-in`) to `proxy`
 
-**Important:** Custom rules on Edge are evaluated BEFORE the client catch-all rule, allowing you to override the default proxy behavior for specific domains/IPs.
+**Important:** Custom rules on Edge are evaluated BEFORE the UDP and client catch-all rules, allowing you to override the default proxy behavior for specific domains/IPs.
+
+> Because the chain link is TCP-only, a custom rule sending UDP to `proxy` will not work. Use `direct` if some UDP traffic must leave the EDGE.
 
 ## GeoIP & GeoSite Data
 
@@ -259,3 +268,20 @@ Download geo data (geoip.dat, geosite.dat)? [Y/n]: Y
 ./xcp.sh rule add
 # blocked, IP, 123.45.67.89,98.76.54.32
 ```
+
+## FAQ
+
+**Q: How do I edit a rule?**  
+A: Rules can't be edited. Remove the old one with `rule rm` and add a new one with `rule add`.
+
+**Q: Can I reorder rules?**  
+A: Not directly. Rules apply in the order they were added. To reorder, remove them and add them back in the order you want.
+
+**Q: What is the difference between `domain:` and a plain domain?**  
+A: A plain domain (`google.com`) matches that name exactly. `domain:google.com` also matches every subdomain, such as `mail.google.com`.
+
+**Q: How do I tell whether a rule is working?**  
+A: Watch the live log with `./xcp.sh logs -f` — traffic matching your rules shows up there.
+
+**Q: How many rules can I add?**  
+A: There is no hard limit, but fewer and simpler rules keep matching fast.

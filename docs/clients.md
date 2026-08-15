@@ -46,9 +46,13 @@ GUI applications to connect to your proxy server.
 
 Use these settings in your client:
 
-| Setting  | Value                                |
-| -------- | ------------------------------------ |
-| Server   | Your EDGE server IP                  |
-| Port     | 443 (SS) / 80 (HTTP) / 1080 (SOCKS5) |
-| Method   | `aes-256-gcm`                        |
-| Password | From `./xcp.sh user ls`              |
+| Setting  | Value                                                    |
+| -------- | -------------------------------------------------------- |
+| Server   | Your EDGE server IP                                      |
+| Port     | 443 (VLESS) / 8388 (Shadowsocks)                         |
+| Method   | `aes-256-gcm`                                            |
+| Password | From `./xcp.sh user ls`                                  |
+
+**VLESS + REALITY** is the one to reach for on a restricted network: it holds 443, borrows a real site's TLS handshake, and carries UDP. `./xcp.sh user ls` prints a share URI that v2rayNG, Hiddify, Streisand, NekoBox, v2rayN and sing-box import directly, and `user add` shows it as a QR code.
+
+**Shadowsocks** is the compatibility fallback, and works against both roles. One account covers both protocols.
