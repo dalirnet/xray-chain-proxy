@@ -40,12 +40,12 @@ QR='█████████████████████████�
 █████████████████████████████'
 
 GW_IP="104.28.55.73"; EDGE_IP="185.92.36.110"
-SS_PORT="8388"; LOCAL_SOCKS_PORT="11080"; DNS_PORT="53"
+SS_PORT="8443"; LOCAL_SOCKS_PORT="11080"; DNS_PORT="53"
 VLESS_PORT="443"; REALITY_DEST="www.microsoft.com"
 SSH_USER="xcp"; SSH_PASS="kQ8vR2mZpL4xN7wD"; DNS_SERVER="1.1.1.1"
 DEMO_USER="john"
 DEMO_PASS="bT5sD1fG8hY3oK7w"
-DEMO_URI="ss://YWVzLTI1Ni1nY206YlQ1c0QxZkc4aFkzb0s3dw==@185.92.36.110:8388#john"
+DEMO_URI="ss://YWVzLTI1Ni1nY206YlQ1c0QxZkc4aFkzb0s3dw==@185.92.36.110:8443#john"
 DEMO_VLESS="vless://8f3a1c2e-5b7d-4e91-a6f0-2d84bc9e1357@185.92.36.110:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.microsoft.com&fp=chrome&pbk=T9xKp2mVqL8nR4wZ3cJ7yB5dF1hG6sA0eN2uX8vC4kM&sid=a1b2c3d4e5f60718&spx=%2F#john"
 
 PROMPT="${GREEN}root@ubuntu${NC}:${CYAN}~${NC}# "
@@ -161,7 +161,7 @@ run_setup_gateway() {
     echo -e "\n${BOLD}>>> Configure Ports${NC}"
     sleep 0.2
     echo -n "VLESS (REALITY) port [443]: "; prompt_default
-    echo -n "Shadowsocks port [8388]: "; prompt_default
+    echo -n "Shadowsocks port [8443]: "; prompt_default
     echo -n "DNS resolver [1.1.1.1]: "; prompt_default
     sleep 0.3
 
@@ -234,7 +234,7 @@ run_setup_edge() {
     echo -e "\n${BOLD}>>> Edge Settings${NC}"
     sleep 0.2
     echo -n "VLESS (REALITY) port [443]: "; prompt_default
-    echo -n "Shadowsocks port [8388]: "; prompt_default
+    echo -n "Shadowsocks port [8443]: "; prompt_default
     echo -n "DNS resolver [1.1.1.1]: "; prompt_default
     sleep 0.3
 

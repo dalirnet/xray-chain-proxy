@@ -20,7 +20,7 @@ A chain proxy for bypassing internet censorship, built on [Xray-core](https://gi
 
 **Why two servers?**
 
-Users in isolated networks cannot directly access many websites. This tool creates a chain:
+Isolated networks block many websites. This tool creates a chain:
 
 1. Your device connects to the **EDGE** server (in your region)
 2. EDGE forwards traffic through an **SSH tunnel** to the **GATEWAY** server (unrestricted region)
@@ -41,9 +41,9 @@ Both roles serve the same two protocols:
 | Protocol        | Port | Method/Auth   | Best For                         |
 | --------------- | ---- | ------------- | -------------------------------- |
 | VLESS + REALITY | 443  | UUID + x25519 | Restricted networks, UDP, mobile |
-| Shadowsocks     | 8388 | `aes-256-gcm` | Mobile apps, best compatibility  |
+| Shadowsocks     | 8443 | `aes-256-gcm` | Mobile apps, best compatibility  |
 
-> One account covers both. The password authenticates Shadowsocks; a UUID authenticates VLESS. Neither puts a credential on the wire in the clear.
+> One account covers both. Shadowsocks derives its key from the password, and VLESS sends its UUID inside the encrypted handshake.
 
 ### Ports
 
@@ -52,7 +52,7 @@ Both roles serve the same two protocols:
 | `22`    | —        | Public   | SSH — the EDGE builds the tunnel here |
 | `80`    | Public   | Public   | Answers with the caller's IP          |
 | `443`   | Public   | Public   | VLESS + REALITY                       |
-| `8388`  | Public   | Public   | Shadowsocks                           |
+| `8443`  | Public   | Public   | Shadowsocks                           |
 | `53`    | Loopback | Loopback | DNS resolver                          |
 | `10080` | Loopback | Loopback | Tunnel endpoint on both servers       |
 | `10085` | Loopback | Loopback | Xray stats API                        |
@@ -61,13 +61,13 @@ Both roles serve the same two protocols:
 Open on the provider firewall — the same rules on both roles:
 
 ```
-22, 80, 443, 8388/tcp
-8388/udp
+22, 80, 443, 8443/tcp
+8443/udp
 ```
 
 Shadowsocks is the only client protocol carrying UDP, so it is the only one that needs a UDP rule. Port 53 needs both, but only from clients you allow with `dns add`, so it gets a per-source rule instead.
 
-REALITY holds 443 because that is what makes the disguise work: handshakes it doesn't recognise are proxied to the real `dest` site, so a prober gets a genuine TLS 1.3 answer with a valid certificate chain — on the port HTTPS is supposed to use. See [REALITY](advanced.md#reality) for the details.
+REALITY holds 443 because that is what makes the disguise work: handshakes from unknown clients are proxied to the real `dest` site, so a prober gets a genuine TLS 1.3 answer with a valid certificate chain — on the port HTTPS is supposed to use. See [REALITY](advanced.md#reality) for the details.
 
 ## Features
 
@@ -115,7 +115,7 @@ On your exit server (unrestricted internet):
 You'll configure:
 
 - VLESS (REALITY) port (default: 443)
-- Shadowsocks port (default: 8388)
+- Shadowsocks port (default: 8443)
 - DNS resolver (default: 1.1.1.1)
 - REALITY dest domain (default: `www.microsoft.com`) — checked for TLS 1.3 and HTTP/2 before it is accepted
 - Tunnel SSH password — press Enter to generate a 32-character one
@@ -133,7 +133,7 @@ Use on EDGE server (setup edge):
 
 Direct client access:
   VLESS Port: 443 (REALITY, borrowing www.microsoft.com)
-  SS Port:    8388
+  SS Port:    8443
   Username:   default
   Password:   xxxxxxxxxxxxxxxx
 
@@ -185,7 +185,7 @@ To enter it by hand:
 | PublicKey   | from `user ls`     |
 | ShortId     | from `user ls`     |
 
-REALITY needs no domain of your own — clients reach the server by IP, and the SNI carries a domain someone else owns. REALITY also authenticates with a timestamp, so both server clocks need to be accurate: more than about 90 seconds of drift and clients fail to connect. `chrony` or `systemd-timesyncd` handles it.
+Clients reach the server by IP, and the SNI carries a domain someone else owns. REALITY authenticates with a timestamp, so keep both server clocks accurate — `chrony` or `systemd-timesyncd` handles it, and roughly 90 seconds of drift is the limit.
 
 ### Shadowsocks
 
@@ -194,7 +194,7 @@ Use any Shadowsocks client:
 | Setting  | Value         |
 | -------- | ------------- |
 | Server   | EDGE IP       |
-| Port     | 8388          |
+| Port     | 8443          |
 | Password | (from setup)  |
 | Method   | `aes-256-gcm` |
 
@@ -204,7 +204,7 @@ See [Clients](clients.md) for recommended apps.
 
 Queries arriving through either proxy protocol resolve through the chain automatically, using the resolver set with `./xcp.sh config set` → `dns`.
 
-Devices that can't run a proxy — TVs, consoles, routers — can point their DNS at the server instead, once you allow them by address:
+Devices where DNS is the only setting available — TVs, consoles, routers — can point their DNS at the server, once you allow them by address:
 
 ```bash
 ./xcp.sh dns add 203.0.113.9      # one client, or a block: 203.0.113.0/24

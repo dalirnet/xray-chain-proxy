@@ -93,7 +93,7 @@ Output:
 ```
 Server: 5.6.7.8
 VLESS: 443 (REALITY → www.microsoft.com)
-Shadowsocks: 8388
+Shadowsocks: 8443
 
 Accounts:
 
@@ -198,7 +198,7 @@ Config:
   Version:    3.x
   VLESS Port: 443
   REALITY:    www.microsoft.com
-  SS Port:    8388
+  SS Port:    8443
   SOCKS Port: 11080 (loopback)
   DNS Port:   53 (loopback)
   DNS Server: 1.1.1.1
@@ -245,7 +245,7 @@ Current: 1.1.1.1
 
 ## DNS Access
 
-The resolver answers on `127.0.0.1` by default, which serves the chain and keeps the server off the open-resolver abuse lists. These commands let named clients reach it — useful for devices that can't run a proxy but can set a DNS server.
+The resolver answers on `127.0.0.1` by default, which serves the chain and keeps the server off the open-resolver abuse lists. These commands let named clients reach it — useful for devices where DNS is the only setting available, such as TVs, consoles and routers.
 
 ### `dns ls`
 
@@ -281,7 +281,7 @@ Allow a client, by address or CIDR block.
 
 The first allowed client binds `dns-in` to `0.0.0.0` and writes the matching `ufw` rules for 53/tcp and 53/udp.
 
-`ufw` must be active — it is what enforces the list. With it inactive the resolver stays on loopback and says so, rather than opening a port nothing is filtering. Prefixes shorter than `/8` prompt for confirmation.
+`ufw` must be active — it is what enforces the list. While it is inactive the resolver stays on loopback and reports that. Prefixes shorter than `/8` prompt for confirmation.
 
 ### `dns rm`
 
@@ -394,7 +394,7 @@ Fetch a page through the tunnel to confirm it carries traffic.
 ./xcp.sh link health
 ```
 
-`xray-tunnel-health.timer` runs this every 60 seconds. Two consecutive failures restart the tunnel and Xray behind it, which catches a link that keeps answering keepalives while carrying almost nothing.
+`xray-tunnel-health.timer` runs this every 60 seconds. Two consecutive failures restart the tunnel and Xray behind it, which catches a link that answers keepalives while its throughput has collapsed.
 
 ## Maintenance
 
@@ -407,6 +407,7 @@ Update script and Xray to latest versions.
 ```
 
 Interactive menu to update:
+
 - Script only (from GitHub)
 - Xray only
 - Both (recommended)

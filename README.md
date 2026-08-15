@@ -11,7 +11,7 @@ One-command chain proxy for bypassing internet censorship, built on [Xray-core](
 
 ## Why Xray Chain Proxy?
 
-Users in restricted networks can't access many websites directly. This tool creates an encrypted two-hop chain that's fast, reliable, and easy to replace if blocked.
+Restricted networks block many websites. This tool creates an encrypted two-hop chain that is fast, reliable, and easy to replace if blocked.
 
 ```
 ┌────────┐      ┌────────┐   SSH tunnel   ┌─────────┐      ┌──────────┐
@@ -32,7 +32,7 @@ Users in restricted networks can't access many websites directly. This tool crea
 
 ## Features
 
-- **2 client protocols** — VLESS+REALITY (443) and Shadowsocks (8388), both authenticating without a cleartext credential
+- **2 client protocols** — VLESS+REALITY (443) and Shadowsocks (8443), both authenticating without a cleartext credential
 - **REALITY camouflage** — borrows a real site's TLS handshake, so probes on 443 get a genuine answer
 - **SSH chain link** — EDGE logs in to GATEWAY with a password and forwards a port
 - **Dedicated tunnel user** — GATEWAY creates a shell-less `xcp` user for the link
@@ -77,9 +77,9 @@ Both roles serve the same two protocols:
 | Protocol        | Port | Method        | Best For                         |
 | --------------- | ---- | ------------- | -------------------------------- |
 | VLESS + REALITY | 443  | UUID + x25519 | Restricted networks, UDP, mobile |
-| Shadowsocks     | 8388 | `aes-256-gcm` | Mobile apps, best compatibility  |
+| Shadowsocks     | 8443 | `aes-256-gcm` | Mobile apps, best compatibility  |
 
-> One account covers both. The password authenticates Shadowsocks; a UUID authenticates VLESS. Neither puts a credential on the wire in the clear.
+> One account covers both. Shadowsocks derives its key from the password, and VLESS sends its UUID inside the encrypted handshake.
 
 **EDGE → GATEWAY:** always SSH. An `xray-tunnel` systemd unit keeps `ssh -L` alive and forwards `127.0.0.1:10080` to the gateway's Xray, where the chain continues to the internet. Xray uses that loopback port as its `proxy` outbound. SSH carries TCP, so DNS travels over TCP through the chain.
 
@@ -90,7 +90,7 @@ Both roles serve the same two protocols:
 | `22`    | —        | Public   | SSH — the edge builds the tunnel here |
 | `80`    | Public   | Public   | Answers with the caller's IP          |
 | `443`   | Public   | Public   | VLESS + REALITY                       |
-| `8388`  | Public   | Public   | Shadowsocks                           |
+| `8443`  | Public   | Public   | Shadowsocks                           |
 | `53`    | Loopback | Loopback | DNS resolver                          |
 | `10080` | Loopback | Loopback | Tunnel endpoint on both servers       |
 | `10085` | Loopback | Loopback | Xray stats API                        |
@@ -99,8 +99,8 @@ Both roles serve the same two protocols:
 Open on the provider firewall — the same rules on both roles:
 
 ```
-22, 80, 443, 8388/tcp
-8388/udp
+22, 80, 443, 8443/tcp
+8443/udp
 ```
 
 Shadowsocks is the only client protocol carrying UDP, so it is the only one needing a UDP rule. Port 53 needs both, but only from clients allowed with `dns add`, so it gets a per-source rule instead.

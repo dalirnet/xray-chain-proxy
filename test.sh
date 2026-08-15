@@ -291,8 +291,8 @@ test_ssh_link() {
 
     local clients='[{"email":"default","password":"pass1","method":"aes-256-gcm"}]'
 
-    xcp_call "gen_edge_config 8388 '$clients' 203.0.113.9 2222 xcp" > "$EDGE"
-    xcp_call "gen_gateway_config 8388 '$clients'" > "$GW"
+    xcp_call "gen_edge_config 8443 '$clients' 203.0.113.9 2222 xcp" > "$EDGE"
+    xcp_call "gen_gateway_config 8443 '$clients'" > "$GW"
 
     test_assert "Edge config is valid JSON" "jq -e . '$EDGE' >/dev/null" || true
     test_assert "Gateway config is valid JSON" "jq -e . '$GW' >/dev/null" || true
@@ -325,10 +325,10 @@ test_ssh_link() {
     # Only Shadowsocks is public here - REALITY is unconfigured in this config,
     # and api, tunnel, dns and the diagnostics SOCKS stay on loopback
     local public=$(jq -r '[.inbounds[] | select(.listen != "127.0.0.1") | .port] | sort | join(",")' "$EDGE")
-    test_assert "Edge exposes only 8388" "[[ '$public' == '8388' ]]" || true
+    test_assert "Edge exposes only 8443" "[[ '$public' == '8443' ]]" || true
 
     local gw_public=$(jq -r '[.inbounds[] | select(.listen != "127.0.0.1") | .port] | sort | join(",")' "$GW")
-    test_assert "Gateway exposes only 8388" "[[ '$gw_public' == '8388' ]]" || true
+    test_assert "Gateway exposes only 8443" "[[ '$gw_public' == '8443' ]]" || true
 
     # Nothing authenticates with a cleartext credential any more
     local plaintext=$(jq '[.inbounds[] | select(.tag == "http-in" or .tag == "socks-in")] | length' "$GW")
@@ -376,8 +376,8 @@ test_dns_service() {
 
     local clients='[{"email":"default","password":"pass1","method":"aes-256-gcm"}]'
 
-    xcp_call "gen_edge_config 8388 '$clients' 203.0.113.9 22 xcp 9.9.9.9" > "$EDGE"
-    xcp_call "gen_gateway_config 8388 '$clients' 9.9.9.9" > "$GW"
+    xcp_call "gen_edge_config 8443 '$clients' 203.0.113.9 22 xcp 9.9.9.9" > "$EDGE"
+    xcp_call "gen_gateway_config 8443 '$clients' 9.9.9.9" > "$GW"
 
     # Both server types answer DNS on 53, bound to loopback so neither becomes
     # an open resolver the internet can use for amplification
@@ -403,7 +403,7 @@ test_dns_service() {
         "[[ \"\$(jq -r '.inbounds[] | select(.tag == \"dns-in\") | .settings.address' '$EDGE')\" == '9.9.9.9' ]]" || true
 
     # DoH: kept verbatim for the dns block, redirect falls back to a plain IP
-    xcp_call "gen_edge_config 8388 '$clients' 203.0.113.9 22 xcp https://dns.google/dns-query" > "$EDGE"
+    xcp_call "gen_edge_config 8443 '$clients' 203.0.113.9 22 xcp https://dns.google/dns-query" > "$EDGE"
     test_assert "DoH resolver kept verbatim" \
         "[[ \"\$(jq -r '.dns.servers[0]' '$EDGE')\" == 'https://dns.google/dns-query' ]]" || true
     test_assert "DoH redirect falls back to an IP" \
@@ -502,8 +502,8 @@ test_reality() {
     local clients="[{\"email\":\"john\",\"password\":\"p1\",\"method\":\"aes-256-gcm\",\"id\":\"${uuid}\"}]"
     local reality='{"port":443,"dest":"www.microsoft.com","privateKey":"PRIV","publicKey":"PUB","shortId":"0123456789abcdef"}'
 
-    xcp_call "gen_gateway_config 8388 '$clients' 1.1.1.1 '$reality'" > "$GW"
-    xcp_call "gen_edge_config 8388 '$clients' 203.0.113.9 22 xcp 1.1.1.1 '$reality'" > "$EDGE"
+    xcp_call "gen_gateway_config 8443 '$clients' 1.1.1.1 '$reality'" > "$GW"
+    xcp_call "gen_edge_config 8443 '$clients' 203.0.113.9 22 xcp 1.1.1.1 '$reality'" > "$EDGE"
 
     test_assert "Gateway config is valid JSON" "jq -e . '$GW' >/dev/null" || true
     test_assert "Edge config is valid JSON" "jq -e . '$EDGE' >/dev/null" || true
@@ -545,7 +545,7 @@ test_reality() {
 
     # 443 is public on both roles
     local gw_public=$(jq -r '[.inbounds[] | select(.listen != "127.0.0.1") | .port] | sort | join(",")' "$GW")
-    test_assert "Gateway exposes 443 and 8388" "[[ '$gw_public' == '443,8388' ]]" || true
+    test_assert "Gateway exposes 443 and 8443" "[[ '$gw_public' == '443,8443' ]]" || true
 
     # Share URI carries everything a client needs
     local uri=$(xcp_call "gen_vless_uri '$uuid' 5.6.7.8 '$reality' john")
@@ -587,7 +587,7 @@ test_reality() {
     test_assert "Removing a user clears both protocols" "[[ '$left' == '[1]' ]]" || true
 
     # Without REALITY the inbound is absent and the rest of the config still stands
-    xcp_call "gen_gateway_config 8388 '$clients' 1.1.1.1" > "$GW"
+    xcp_call "gen_gateway_config 8443 '$clients' 1.1.1.1" > "$GW"
     test_assert "Config without REALITY is valid JSON" "jq -e . '$GW' >/dev/null" || true
 
     local none=$(jq '[.inbounds[] | select(.tag == "vless-in")] | length' "$GW")
@@ -596,7 +596,7 @@ test_reality() {
 
     # Accounts predating REALITY have no uuid and stay on the other protocols
     local legacy='[{"email":"old","password":"p2","method":"aes-256-gcm"}]'
-    xcp_call "gen_gateway_config 8388 '$legacy' 1.1.1.1 '$reality'" > "$GW"
+    xcp_call "gen_gateway_config 8443 '$legacy' 1.1.1.1 '$reality'" > "$GW"
     test_assert "Legacy account config is valid JSON" "jq -e . '$GW' >/dev/null" || true
 
     local legacy_clients=$(jq '[.inbounds[] | select(.tag == "vless-in") | .settings.clients[]] | length' "$GW")
@@ -700,7 +700,7 @@ test_dns_access() {
 
     # The list survives a gateway change, which rebuilds the config from scratch
     local clients='[{"email":"a","password":"p","method":"aes-256-gcm"}]'
-    xcp_call "gen_edge_config 8388 '$clients' 1.2.3.4 22 xcp" > "$CONFIG"
+    xcp_call "gen_edge_config 8443 '$clients' 1.2.3.4 22 xcp" > "$CONFIG"
     test_assert "Generated config starts on loopback" \
         "[[ \"\$(jq -r '.inbounds[] | select(.tag == \"dns-in\") | .listen' '$CONFIG')\" == '127.0.0.1' ]]" || true
 
@@ -718,10 +718,10 @@ test_firewall() {
         log_info() { :; }"
 
     : > "$LOG"
-    xcp_call "$harness; configure_firewall 80 443 8388 8388/udp" &>/dev/null || true
+    xcp_call "$harness; configure_firewall 80 443 8443 8443/udp" &>/dev/null || true
 
     test_assert "Bare port opens TCP" "grep -q 'ufw allow 80/tcp' '$LOG'" || true
-    test_assert "port/proto is honoured" "grep -q 'ufw allow 8388/udp' '$LOG'" || true
+    test_assert "port/proto is honoured" "grep -q 'ufw allow 8443/udp' '$LOG'" || true
 
     # Only Shadowsocks carries UDP - REALITY is streamSettings.network=tcp, the
     # port 80 responder is a ListenStream socket, and SSH is TCP. A blanket
@@ -734,14 +734,14 @@ test_firewall() {
     : > "$LOG"
     xcp_call "firewall_active() { return 1; }
         ufw() { echo \"ufw \$*\" >> '$LOG'; }
-        configure_firewall 80 8388/udp" &>/dev/null || true
+        configure_firewall 80 8443/udp" &>/dev/null || true
     test_assert "Inactive firewall writes no rules" "[[ ! -s '$LOG' ]]" || true
 
     # The inbound settings the rules are derived from
     local clients='[{"email":"a","password":"p","method":"aes-256-gcm","id":"aa-bb"}]'
     local reality='{"port":443,"dest":"a.com","privateKey":"P","publicKey":"K","shortId":"ab"}'
     local CFG="/tmp/xcp-fw-$$.json"
-    xcp_call "gen_gateway_config 8388 '$clients' 1.1.1.1 '$reality'" > "$CFG"
+    xcp_call "gen_gateway_config 8443 '$clients' 1.1.1.1 '$reality'" > "$CFG"
 
     test_assert "Shadowsocks accepts TCP and UDP" \
         "[[ \"\$(jq -r '.inbounds[]|select(.tag==\"ss-in\")|.settings.network' '$CFG')\" == 'tcp,udp' ]]" || true
@@ -756,31 +756,31 @@ test_firewall() {
 test_port_preflight() {
     test_section "Testing Port Preflight"
 
-    local BUSY='tcp LISTEN 0 4096 0.0.0.0:8388 0.0.0.0:* users:(("nginx",pid=999,fd=6))'
+    local BUSY='tcp LISTEN 0 4096 0.0.0.0:8443 0.0.0.0:* users:(("nginx",pid=999,fd=6))'
 
     test_assert "Sees a port in use" \
-        "xcp_call \"ss() { echo '$BUSY'; }; port_taken 8388\"" || true
+        "xcp_call \"ss() { echo '$BUSY'; }; port_taken 8443\"" || true
     test_assert "Sees a free port as free" \
         "! xcp_call \"ss() { echo '$BUSY'; }; port_taken 443\"" || true
 
     # Without ss the answer is unknown - reporting a clash would block setup on
     # a machine that is actually fine
     test_assert "No ss means no claimed clash" \
-        "! xcp_call \"PATH=/nonexistent; port_taken 8388\"" || true
+        "! xcp_call \"PATH=/nonexistent; port_taken 8443\"" || true
 
     # Free ports pass silently
     test_assert "All free passes" \
-        "xcp_call \"systemctl() { :; }; ss() { echo ''; }; preflight_ports 443 8388\"" || true
+        "xcp_call \"systemctl() { :; }; ss() { echo ''; }; preflight_ports 443 8443\"" || true
 
     # A clash aborts rather than letting Xray fail to start later with no reason
     test_assert "A clash aborts setup" \
-        "! xcp_call \"systemctl() { :; }; ss() { echo '$BUSY'; }; preflight_ports 443 8388\" 2>/dev/null" || true
+        "! xcp_call \"systemctl() { :; }; ss() { echo '$BUSY'; }; preflight_ports 443 8443\" 2>/dev/null" || true
 
     # Captured rather than piped: preflight exits non-zero by design, and a
     # `| grep -q` would report that exit (or SIGPIPE) instead of the match
     local msg
-    msg=$(xcp_call "systemctl() { :; }; ss() { echo '$BUSY'; }; preflight_ports 8388" 2>&1 || true)
-    test_assert "The clash names the port" "[[ '$msg' == *8388* ]]" || true
+    msg=$(xcp_call "systemctl() { :; }; ss() { echo '$BUSY'; }; preflight_ports 8443" 2>&1 || true)
+    test_assert "The clash names the port" "[[ '$msg' == *8443* ]]" || true
     test_assert "The clash names the holder" "[[ '$msg' == *nginx* ]]" || true
 
     # The diagnostic port stays off the 1008x block, where 10085 is the Xray API

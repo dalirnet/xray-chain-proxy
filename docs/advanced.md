@@ -69,11 +69,11 @@ net.ipv4.tcp_slow_start_after_idle = 0
 
 `cubic`, the default, treats every lost packet as congestion and backs off — on a shaped path it spends most of its time backing off. BBR paces on measured bandwidth and round-trip time, so it keeps the link full where cubic gives up. The 16 MB buffers let a high-latency connection hold enough data in flight to fill its bandwidth-delay product, which the defaults cap well below on a 150 ms+ path.
 
-A kernel without BBR keeps its current congestion control, and setup says so.
+A kernel that offers BBR gets it; anything else keeps its current congestion control, and setup reports which applied.
 
 ### Health checks
 
-`ServerAliveInterval` proves the socket is alive. A shaped link keeps answering keepalives while carrying almost nothing, so an `xray-tunnel-health.timer` fetches a page through the tunnel every 60 seconds:
+`ServerAliveInterval` proves the socket is alive. A shaped link answers keepalives while its throughput has collapsed, so an `xray-tunnel-health.timer` fetches a page through the tunnel every 60 seconds:
 
 ```bash
 ./xcp.sh link health     # run one check by hand
@@ -83,11 +83,11 @@ Two consecutive failures restart the tunnel and Xray behind it. One slow fetch c
 
 ### Restart policy
 
-The `xray-tunnel` unit sets `StartLimitIntervalSec=0`, so systemd retries forever. With the default limit of 5 starts in 10 seconds, a gateway that is briefly unreachable at boot — `ssh` exits instantly on a refused connection or a DNS failure — would leave the unit in a failed state that never recovers on its own.
+The `xray-tunnel` unit sets `StartLimitIntervalSec=0`, so systemd retries forever. The default limit of 5 starts in 10 seconds would strand the unit in a failed state whenever the gateway is briefly unreachable at boot, since `ssh` exits instantly on a refused connection or a DNS failure.
 
 ### Transport options
 
-`ssh` runs with `IPQoS=none`, leaving the DSCP field alone. OpenSSH otherwise marks packets `af21`/`cs1`, which is a distinctive signature and can land the tunnel in a differently shaped queue. The cipher is pinned to `aes128-gcm@openssh.com` where the CPU has AES instructions and `chacha20-poly1305@openssh.com` where it does not, which keeps a cheap VPS off the slow side of that trade.
+`ssh` runs with `IPQoS=none`, leaving the DSCP field alone. OpenSSH otherwise marks packets `af21`/`cs1`, which is a distinctive signature and can land the tunnel in a differently shaped queue. The cipher is pinned to `aes128-gcm@openssh.com` on CPUs with AES instructions and `chacha20-poly1305@openssh.com` elsewhere, which keeps a cheap VPS on the fast side of that trade.
 
 ### Reading link quality
 
@@ -114,14 +114,14 @@ Routing rules and per-user stats apply on the EDGE the client connects to and on
 
 ## SSH Tunnel Internals
 
-| Item        | Value                                             |
-| ----------- | ------------------------------------------------- |
-| Service     | `xray-tunnel.service` (systemd, auto-restart)     |
+| Item        | Value                                               |
+| ----------- | --------------------------------------------------- |
+| Service     | `xray-tunnel.service` (systemd, auto-restart)       |
 | Login       | `sshpass -f /usr/local/xray/tunnel_pass` (mode 600) |
-| Known hosts | `/usr/local/xray/known_hosts`                     |
-| Forward     | `-L 127.0.0.1:10080:127.0.0.1:10080`              |
-| Local end   | `127.0.0.1:10080`, used by Xray's `proxy` outbound |
-| Far end     | `127.0.0.1:10080`, the `tunnel-in` SOCKS5 inbound |
+| Known hosts | `/usr/local/xray/known_hosts`                       |
+| Forward     | `-L 127.0.0.1:10080:127.0.0.1:10080`                |
+| Local end   | `127.0.0.1:10080`, used by Xray's `proxy` outbound  |
+| Far end     | `127.0.0.1:10080`, the `tunnel-in` SOCKS5 inbound   |
 
 Reading the password from a file keeps it out of `ps` and the unit file.
 
@@ -157,11 +157,11 @@ SSH port forwarding carries TCP. The EDGE config handles this:
 
 Both server types run a resolver on `127.0.0.1:53`, TCP and UDP, built from three pieces:
 
-| Piece            | Role                                                       |
-| ---------------- | ---------------------------------------------------------- |
-| `dns-in` inbound | `dokodemo-door` on port 53, redirecting to the resolver     |
-| `dns-out`        | Xray's `dns` outbound, answering from the built-in client   |
-| `.dns.servers`   | The resolver itself, stored as `.xcp.dns` in the config     |
+| Piece            | Role                                                      |
+| ---------------- | --------------------------------------------------------- |
+| `dns-in` inbound | `dokodemo-door` on port 53, redirecting to the resolver   |
+| `dns-out`        | Xray's `dns` outbound, answering from the built-in client |
+| `.dns.servers`   | The resolver itself, stored as `.xcp.dns` in the config   |
 
 On an EDGE the resolver is written as `tcp://ADDRESS` so queries fit through the tunnel. A DoH URL is stored as typed and travels the chain over HTTPS.
 
@@ -170,7 +170,7 @@ On an EDGE the resolver is written as `tcp://ADDRESS` so queries fit through the
 # Select: 3) dns
 ```
 
-Traffic arriving through VLESS or Shadowsocks resolves through this automatically — clients need no DNS setting of their own.
+Traffic arriving through VLESS or Shadowsocks resolves through this automatically, so clients work with whatever DNS they already have.
 
 Loopback is the default because a resolver reachable from the internet gets found by scanners and used for amplification, which is a common reason providers suspend an account. To let a device query it directly, allow that device by address — see [DNS access](commands.md#dns-access):
 
@@ -205,32 +205,32 @@ Change with:
 Script auto-opens ports if UFW is active. For other firewalls and for the provider's own security group, both roles need the same rules:
 
 ```
-22, 80, 443, 8388/tcp
-8388/udp
+22, 80, 443, 8443/tcp
+8443/udp
 ```
 
-Both roles serve the same two client protocols: VLESS+REALITY (443) and Shadowsocks (8388). The GATEWAY additionally accepts the tunnel on SSH (22).
+Both roles serve the same two client protocols: VLESS+REALITY (443) and Shadowsocks (8443). The GATEWAY additionally accepts the tunnel on SSH (22).
 
-| Port   | Protocols | Why                                                        |
-| ------ | --------- | ---------------------------------------------------------- |
-| `22`   | TCP       | SSH                                                        |
-| `80`   | TCP       | The IP responder is a `ListenStream` socket                |
-| `443`  | TCP       | REALITY sets `streamSettings.network` to `tcp`             |
-| `8388` | TCP + UDP | Shadowsocks sets `settings.network` to `tcp,udp`           |
+| Port   | Protocols | Why                                              |
+| ------ | --------- | ------------------------------------------------ |
+| `22`   | TCP       | SSH                                              |
+| `80`   | TCP       | The IP responder is a `ListenStream` socket      |
+| `443`  | TCP       | REALITY sets `streamSettings.network` to `tcp`   |
+| `8443` | TCP + UDP | Shadowsocks sets `settings.network` to `tcp,udp` |
 
 Shadowsocks is the only client protocol carrying UDP, so it is the only one that needs a UDP rule. Note that a UDP payload reaching an **EDGE** is dropped by the routing tail anyway, since the SSH tunnel carries TCP — Shadowsocks UDP only reaches the internet from a **GATEWAY**.
 
-Port `53` needs both TCP and UDP, but only from the clients you allow with `dns add`, so it gets a per-source rule instead of a blanket one. Ports `10080`, `10085` and `11080` stay bound to `127.0.0.1` and need no rule at all.
+Port `53` needs both TCP and UDP, and only from the clients you allow with `dns add`, so it gets a per-source rule. Ports `10080`, `10085` and `11080` stay bound to `127.0.0.1` and need no rule at all.
 
 ## REALITY
 
-The VLESS inbound on 443 borrows a real site's TLS handshake. Handshakes it doesn't recognise are proxied to `dest`, so an active prober gets a genuine TLS 1.3 answer with that site's own valid certificate chain. There is no fake certificate to fingerprint and no nested handshake to spot.
+The VLESS inbound on 443 borrows a real site's TLS handshake. Handshakes from unknown clients are proxied to `dest`, so an active prober gets a genuine TLS 1.3 answer with that site's own valid certificate chain — a real certificate, presented by a real site.
 
 ### No domain required
 
 Two names are involved and only one of them is yours to arrange — neither needs a DNS record pointing at your server:
 
-- `dest` / `sni` is **someone else's** domain. You borrow its handshake, so there is no certificate to obtain or renew.
+- `dest` / `sni` is **someone else's** domain. You borrow its handshake, so the certificate stays that site's responsibility.
 - Your server is reached by **bare IP**, which is what the share URI carries.
 
 ```
@@ -238,7 +238,7 @@ vless://<uuid>@203.0.113.9:443?...&sni=www.microsoft.com&...
               ↑ your IP              ↑ the borrowed domain
 ```
 
-The client opens TCP to your IP, then sends a ClientHello announcing the borrowed name. Plain VLESS+TLS and Trojan need a domain you control, a DNS record and a maintained certificate; REALITY needs none of the three. Putting a domain in front of your server still works, and makes rotating the IP easier, but nothing here depends on it.
+The client opens TCP to your IP, then sends a ClientHello announcing the borrowed name. Plain VLESS+TLS and Trojan need a domain you control, a DNS record and a maintained certificate. REALITY works from a bare IP. Putting a domain in front of your server also works, and makes rotating the IP easier.
 
 Setup generates the x25519 pair with `xray x25519` and a random 8-byte `shortId`. The private key stays in the inbound; the public half lives in the config's `xcp.reality` block, which is what rebuilds share URIs later.
 
@@ -274,7 +274,7 @@ Both roles answer on 80 with the address the connection arrives from:
 curl http://SERVER_IP     # 203.0.113.9
 ```
 
-An `xcp-web.socket` systemd unit owns the port and hands each connection to a short-lived responder running as `nobody`, with `ProtectSystem=strict` and `NoNewPrivileges`. No web server is installed, and nothing stays resident between connections. If something already holds port 80, setup says so and skips it.
+An `xcp-web.socket` systemd unit owns the port and hands each connection to a short-lived responder under `DynamicUser`, with `ProtectSystem=strict` and `NoNewPrivileges`. systemd owns the socket and each worker exits with its connection. If something already holds port 80, setup reports it and skips it.
 
 ## Troubleshooting
 
@@ -303,10 +303,10 @@ journalctl -u xray -n 50
 1. Check the tunnel: `./xcp.sh link ls`
 2. Read tunnel logs: `./xcp.sh link logs`
 3. Verify SSH by hand:
-   ```bash
-   ssh -p 22 xcp@GATEWAY_IP
-   ```
-   The `xcp` user is forward-only, so a successful login closes right away. That is the expected result.
+    ```bash
+    ssh -p 22 xcp@GATEWAY_IP
+    ```
+    The `xcp` user is forward-only, so a successful login closes right away. That is the expected result.
 4. Check the GATEWAY's `sshd` is running and its firewall allows the SSH port
 5. Restart the tunnel: `./xcp.sh link restart`
 

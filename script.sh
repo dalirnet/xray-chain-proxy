@@ -24,7 +24,7 @@
 # Both roles listen on the same ports, so one firewall rule covers them:
 #
 #   Public:    22 (ssh, GATEWAY only), 80 (ip echo), 443 (vless/reality),
-#              8388 (shadowsocks)
+#              8443 (shadowsocks)
 #   Loopback:  53 (dns), 10080 (tunnel), 10085 (stats api),
 #              11080 (no-auth socks5 for diagnostics)
 #
@@ -96,8 +96,12 @@ readonly API_PORT=10085
 readonly SYSCTL_DROPIN="/etc/sysctl.d/99-xcp.conf"
 
 # Default ports. Both roles listen on the same set, so one provider firewall
-# rule covers them: 22, 80, 443, 8388.
-readonly DEFAULT_SS_PORT=8388
+# rule covers them: 22, 80, 443, 8443.
+#
+# Shadowsocks sits on 8443, which reads as alternate HTTPS and stays open on
+# networks that close uncommon ports. Its canonical 8388 heads every block list
+# and was measured blocked on a censored path where 8443 carried traffic.
+readonly DEFAULT_SS_PORT=8443
 readonly DEFAULT_DNS_PORT=53
 
 # No-auth SOCKS5 on loopback, for `test` and for curl on the server itself.

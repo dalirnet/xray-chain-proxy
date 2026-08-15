@@ -6,19 +6,19 @@ Routing rules allow you to control how traffic flows through your proxy chain. Y
 
 ### Gateway Server
 
-| Outbound  | Description                    | Use Case                     |
-|-----------|--------------------------------|------------------------------|
-| `direct`  | Direct connection to internet  | Normal traffic               |
-| `blocked` | Block traffic completely       | Ads, malware, tracking       |
+| Outbound  | Description                   | Use Case               |
+| --------- | ----------------------------- | ---------------------- |
+| `direct`  | Direct connection to internet | Normal traffic         |
+| `blocked` | Block traffic completely      | Ads, malware, tracking |
 
 ### Edge Server
 
-| Outbound  | Description                       | Use Case                      |
-|-----------|-----------------------------------|-------------------------------|
-| `proxy`   | Route through the SSH tunnel      | Censored content, privacy     |
-| `direct`  | Leave from the edge itself        | Streaming, local sites        |
-| `blocked` | Block traffic at entry point      | Ads, malware before the chain |
-| `dns-out` | Built-in, answers DNS over TCP    | Managed automatically         |
+| Outbound  | Description                    | Use Case                      |
+| --------- | ------------------------------ | ----------------------------- |
+| `proxy`   | Route through the SSH tunnel   | Censored content, privacy     |
+| `direct`  | Leave from the edge itself     | Streaming, local sites        |
+| `blocked` | Block traffic at entry point   | Ads, malware before the chain |
+| `dns-out` | Built-in, answers DNS over TCP | Managed automatically         |
 
 > `dns-out` is added by the script and should not be used in custom rules.
 
@@ -29,11 +29,13 @@ Routing rules allow you to control how traffic flows through your proxy chain. Y
 Match traffic by domain name or domain patterns.
 
 **Formats:**
+
 - Simple domain: `google.com`, `facebook.com`
 - Domain prefix: `domain:netflix.com` (matches subdomains)
 - GeoSite: `geosite:cn`, `geosite:google`, `geosite:category-ads`
 
 **Example:**
+
 ```bash
 ./xcp.sh rule add
 # Outbound: direct
@@ -46,11 +48,13 @@ Match traffic by domain name or domain patterns.
 Match traffic by IP address or CIDR range.
 
 **Formats:**
+
 - Individual IP: `8.8.8.8`, `1.1.1.1`
 - CIDR range: `192.168.0.0/16`, `10.0.0.0/8`
 - GeoIP: `geoip:us`, `geoip:cn`, `geoip:private`, `geoip:ir`
 
 **Example:**
+
 ```bash
 ./xcp.sh rule add
 # Outbound: proxy
@@ -69,6 +73,7 @@ View all custom routing rules.
 ```
 
 **Output:**
+
 ```
 Routing Rules (edge):
 
@@ -91,6 +96,7 @@ Add a new routing rule interactively.
 ```
 
 **Prompts:**
+
 1. Outbound tag (direct/proxy/blocked)
 2. Rule type (1=domain, 2=IP)
 3. Values (comma-separated)
@@ -198,7 +204,7 @@ Rules are evaluated in order. First matching rule wins.
 
 **Important:** Custom rules on Edge are evaluated BEFORE the UDP and client catch-all rules, allowing you to override the default proxy behavior for specific domains/IPs.
 
-> Because the chain link is TCP-only, a custom rule sending UDP to `proxy` will not work. Use `direct` if some UDP traffic must leave the EDGE.
+> The chain link carries TCP, so send UDP to `direct` when some of it must leave the EDGE.
 
 ## GeoIP & GeoSite Data
 
@@ -210,6 +216,7 @@ Download geo data (geoip.dat, geosite.dat)? [Y/n]: Y
 ```
 
 **Common GeoSite categories:**
+
 - `geosite:category-ads` - Ad domains
 - `geosite:category-ads-all` - All ad-related domains
 - `geosite:google` - Google services
@@ -217,6 +224,7 @@ Download geo data (geoip.dat, geosite.dat)? [Y/n]: Y
 - `geosite:cn` - Chinese domains
 
 **Common GeoIP codes:**
+
 - `geoip:private` - Private IP ranges
 - `geoip:cn` - China
 - `geoip:us` - United States
@@ -272,7 +280,7 @@ Download geo data (geoip.dat, geosite.dat)? [Y/n]: Y
 ## FAQ
 
 **Q: How do I edit a rule?**  
-A: Rules can't be edited. Remove the old one with `rule rm` and add a new one with `rule add`.
+A: Replace it — `rule rm` the old one, then `rule add` the new one.
 
 **Q: Can I reorder rules?**  
 A: Not directly. Rules apply in the order they were added. To reorder, remove them and add them back in the order you want.

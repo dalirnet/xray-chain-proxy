@@ -62,7 +62,7 @@ Edge-only. Shows where this server chains to: the gateway address, how it authen
 
 ## DNS Access
 
-The resolver answers on loopback by default, which serves the chain and keeps the server off the open-resolver abuse lists. Devices that can't run a proxy — TVs, consoles, routers — can query it once you allow them by address with `dns add`. Adding the first client binds the resolver to `0.0.0.0`; `ufw` is what enforces the list, and `dns ls` says so when it isn't active.
+The resolver answers on loopback by default, which serves the chain and keeps the server off the open-resolver abuse lists. Devices where DNS is the only setting available — TVs, consoles, routers — can query it once you allow them by address with `dns add`. Adding the first client binds the resolver to `0.0.0.0`; `ufw` enforces the list, and `dns ls` reports whether it is active.
 
 ```bash
 ./xcp.sh dns ls
