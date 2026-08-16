@@ -860,6 +860,43 @@ test_pipefail_paths() {
     rm -f "$lib" "$lib.d" "$fake"; rm -rf "$edir"
 }
 
+test_function_bodies() {
+    test_section "Testing Function Bodies"
+
+    # A function whose body is just a call to itself recurses until the stack
+    # runs out, which surfaces as "Segmentation fault (core dumped)" at whatever
+    # command happened to reach it. bash -n accepts it, so only this catches it.
+    local selfcalls
+    selfcalls=$(awk '
+        /^[a-z_]+\(\) \{/ { name = substr($1, 1, index($1, "(") - 1); body = ""; next }
+        name && /^\}/ { if (body ~ ("(^|[^a-zA-Z_])" name "([^a-zA-Z_(]|$)")) print name; name = ""; next }
+        name { body = body "\n" $0 }
+    ' "$SCRIPT_PATH")
+
+    test_assert "No function calls itself" "[[ -z '$selfcalls' ]]" || true
+    [[ -n "$selfcalls" ]] && echo "     offending: $selfcalls"
+
+    # apply_config is the one every config-writing command ends on, so pin what
+    # it actually does rather than only that it exists. Compared via flags: the
+    # bodies contain pipes and quotes that would break an eval'd condition.
+    local body has
+    body=$(sed -n '/^apply_config() {/,/^}/p' "$SCRIPT_PATH")
+
+    has=no; [[ "$body" == *validate_config* ]] && has=yes
+    test_assert "apply_config validates" "[[ '$has' == yes ]]" || true
+
+    has=no; [[ "$body" == *"systemctl restart xray"* ]] && has=yes
+    test_assert "apply_config restarts xray" "[[ '$has' == yes ]]" || true
+
+    # Every command that rewrites the config must end by applying it
+    local fn
+    for fn in user_add user_rm config_port config_dns config_dest rule_add rule_rm dns_add dns_rm; do
+        body=$(sed -n "/^${fn}() {/,/^}/p" "$SCRIPT_PATH")
+        has=no; [[ "$body" == *apply_config* ]] && has=yes
+        test_assert "$fn applies its change" "[[ '$has' == yes ]]" || true
+    done
+}
+
 test_config_write() {
     test_section "Testing Config Writes"
 
@@ -957,6 +994,7 @@ main() {
     test_firewall
     test_port_preflight
     test_pipefail_paths
+    test_function_bodies
     test_config_write
     test_version_sync
 

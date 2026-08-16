@@ -540,7 +540,8 @@ config_write() {
 
 # Check the config and load it. Every command that edits the config ends here.
 apply_config() {
-    apply_config
+    validate_config
+    systemctl restart xray
 }
 
 # True only when ufw is installed and enforcing.
