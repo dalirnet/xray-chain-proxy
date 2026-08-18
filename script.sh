@@ -1146,11 +1146,32 @@ tunnel_save_password() {
     chmod 600 "$TUNNEL_PASS_FILE"
 }
 
-# Test password login to the gateway
+# Test password login to the gateway.
+# The tunnel user is shell-less, so asking it to run a command proves nothing:
+# nologin answers "This account is currently not available." and exits non-zero
+# on a login that authenticated perfectly. Open the real thing instead - a
+# forward-only session, exactly as the service does - and take the local
+# listener coming up as proof that the password was accepted.
 tunnel_can_login() {
     local host="$1" port="$2" user="$3"
+    local probe=$((TUNNEL_PORT + 1)) pid rc=1 i
+
     # shellcheck disable=SC2046
-    sshpass -f "$TUNNEL_PASS_FILE" ssh $(ssh_opts) -p "$port" -n "${user}@${host}" true &>/dev/null
+    sshpass -f "$TUNNEL_PASS_FILE" ssh $(ssh_opts) -p "$port" -n -N -T \
+        -o ExitOnForwardFailure=yes \
+        -L "127.0.0.1:${probe}:127.0.0.1:${TUNNEL_PORT}" "${user}@${host}" &>/dev/null &
+    pid=$!
+
+    for i in {1..10}; do
+        (exec 3<>"/dev/tcp/127.0.0.1/${probe}") 2>/dev/null && { rc=0; break; }
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 1
+    done
+
+    kill "$pid" &>/dev/null || true
+    wait "$pid" 2>/dev/null || true
+
+    return "$rc"
 }
 
 # Install and start the tunnel service
@@ -1242,8 +1263,13 @@ tunnel_wait() {
 
 # Confirm the far end is a gateway set up with this script: the forwarded port
 # must answer as a SOCKS5 proxy and carry traffic out to the internet.
+#
+# socks5h hands the hostname to the gateway to resolve. Plain socks5 resolves it
+# on the edge first, where the censored resolver this box sits behind is exactly
+# what the chain exists to route around - so the lookup fails, curl never opens
+# the tunnel, and a healthy gateway reads as missing.
 tunnel_verify_gateway() {
-    curl -s --proxy "socks5://127.0.0.1:${TUNNEL_PORT}" --connect-timeout 10 --max-time 20 \
+    curl -s --proxy "socks5h://127.0.0.1:${TUNNEL_PORT}" --connect-timeout 10 --max-time 20 \
         -o /dev/null "http://ip-api.com/line/?fields=query" 2>/dev/null
 }
 
