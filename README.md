@@ -32,11 +32,12 @@ Restricted networks block many websites. This tool creates an encrypted two-hop 
 
 ## Features
 
-- **2 client protocols** — VLESS+REALITY (443) and Shadowsocks (8443), both authenticating without a cleartext credential
+- **2 client protocols** — VLESS+REALITY (443) and Shadowsocks (8443), both or either one, each authenticating without a cleartext credential
 - **REALITY camouflage** — borrows a real site's TLS handshake, so probes on 443 get a genuine answer
 - **SSH chain link** — EDGE logs in to GATEWAY with a password and forwards a port
 - **Dedicated tunnel user** — GATEWAY creates a shell-less `xcp` user for the link
 - **Link health checks** — the tunnel is fetched through every 60s, and restarted when it stops carrying traffic
+- **Custom ports** — VLESS, Shadowsocks, IP echo and DNS each take any port
 - **DNS built in** — Loopback port 53 on both servers, resolver switchable to DoH
 - **One-command setup** — Single script, no manual config files
 - **Multi-user management** — Unlimited accounts, each working across both protocols
@@ -72,14 +73,24 @@ That's it. Run `./xcp.sh user ls` to see credentials and QR codes.
 
 ## Protocols
 
-Both roles serve the same two protocols:
+Each server offers one or both protocols — setup asks, and enables both by default:
 
 | Protocol        | Port | Method        | Best For                         |
 | --------------- | ---- | ------------- | -------------------------------- |
 | VLESS + REALITY | 443  | UUID + x25519 | Restricted networks, UDP, mobile |
 | Shadowsocks     | 8443 | `aes-256-gcm` | Mobile apps, best compatibility  |
 
-> One account covers both. Shadowsocks derives its key from the password, and VLESS sends its UUID inside the encrypted handshake.
+> One account covers every enabled protocol. Shadowsocks derives its key from the password, and VLESS sends its UUID inside the encrypted handshake.
+
+```
+Client protocols:
+  1) Both VLESS+REALITY and Shadowsocks
+  2) VLESS+REALITY only
+  3) Shadowsocks only
+Select (1-3, default: 1):
+```
+
+A server with one protocol skips everything the other needs: Shadowsocks-only skips REALITY entirely, and VLESS-only opens no UDP port and asks no account password.
 
 **EDGE → GATEWAY:** always SSH. An `xray-tunnel` systemd unit keeps `ssh -L` alive and forwards `127.0.0.1:10080` to the gateway's Xray, where the chain continues to the internet. Xray uses that loopback port as its `proxy` outbound. SSH carries TCP, so DNS travels over TCP through the chain.
 
@@ -95,6 +106,8 @@ Both roles serve the same two protocols:
 | `10080` | Loopback | Loopback | Tunnel endpoint on both servers       |
 | `10085` | Loopback | Loopback | Xray stats API                        |
 | `11080` | Loopback | Loopback | No-auth SOCKS5 for diagnostics        |
+
+`80`, `443`, `8443` and `53` are defaults: setup asks for each, and `config port` changes them later. The firewall rules follow whichever ports you choose.
 
 Open on the provider firewall — the same rules on both roles:
 
@@ -143,7 +156,6 @@ Full documentation with guides, client recommendations, and advanced architectur
 make test            # Run all tests
 make lint            # Check syntax
 make check-deps      # Verify dependencies
-make version         # Show script version
 ```
 
 ## Contributing

@@ -163,6 +163,8 @@ Both server types run a resolver on `127.0.0.1:53`, TCP and UDP, built from thre
 | `dns-out`        | Xray's `dns` outbound, answering from the built-in client |
 | `.dns.servers`   | The resolver itself, stored as `.xcp.dns` in the config   |
 
+`dns-in` listens on 53 by default; `config port` moves it to any port, and the resolver it forwards to stays on 53. A custom port is clear of `systemd-resolved` from the start, so the stub handover below applies to 53 only.
+
 On an EDGE the resolver is written as `tcp://ADDRESS` so queries fit through the tunnel. A DoH URL is stored as typed and travels the chain over HTTPS.
 
 ```bash
@@ -209,7 +211,7 @@ Script auto-opens ports if UFW is active. For other firewalls and for the provid
 8443/udp
 ```
 
-Both roles serve the same two client protocols: VLESS+REALITY (443) and Shadowsocks (8443). The GATEWAY additionally accepts the tunnel on SSH (22).
+Both roles serve VLESS+REALITY (443), Shadowsocks (8443) or both, as chosen at setup — open only the ports of the enabled protocols. The GATEWAY additionally accepts the tunnel on SSH (22).
 
 | Port   | Protocols | Why                                              |
 | ------ | --------- | ------------------------------------------------ |
@@ -219,6 +221,8 @@ Both roles serve the same two client protocols: VLESS+REALITY (443) and Shadowso
 | `8443` | TCP + UDP | Shadowsocks sets `settings.network` to `tcp,udp` |
 
 Shadowsocks is the only client protocol carrying UDP, so it is the only one that needs a UDP rule. Note that a UDP payload reaching an **EDGE** is dropped by the routing tail anyway, since the SSH tunnel carries TCP — Shadowsocks UDP only reaches the internet from a **GATEWAY**.
+
+The ports above are defaults. With custom ports from setup or `config port`, open those instead — `ufw` gets them automatically.
 
 Port `53` needs both TCP and UDP, and only from the clients you allow with `dns add`, so it gets a per-source rule. Ports `10080`, `10085` and `11080` stay bound to `127.0.0.1` and need no rule at all.
 
@@ -234,7 +238,7 @@ Two names are involved and only one of them is yours to arrange — neither need
 - Your server is reached by **bare IP**, which is what the share URI carries.
 
 ```
-vless://<uuid>@203.0.113.9:443?...&sni=www.bing.com&...
+vless://<uuid>@203.0.113.9:443?...&sni=www.cloudflare.com&...
               ↑ your IP              ↑ the borrowed domain
 ```
 
@@ -254,7 +258,7 @@ Setup checks the domain with `openssl s_client` and accepts it when it answers T
 Check a candidate by hand:
 
 ```bash
-openssl s_client -connect www.bing.com:443 -tls1_3 -alpn h2 </dev/null 2>&1 \
+openssl s_client -connect www.cloudflare.com:443 -tls1_3 -alpn h2 </dev/null 2>&1 \
   | grep -E 'Protocol|ALPN'
 ```
 
@@ -268,13 +272,13 @@ VLESS carries UDP inside its TCP connection, so QUIC, calls and games work for c
 
 ## Port 80
 
-Both roles answer on 80 with the address the connection arrives from:
+Both roles answer on 80 (or the port chosen at setup or with `config port`) with the address the connection arrives from:
 
 ```bash
 curl http://SERVER_IP     # 203.0.113.9
 ```
 
-An `xcp-web.socket` systemd unit owns the port and hands each connection to a short-lived responder under `DynamicUser`, with `ProtectSystem=strict` and `NoNewPrivileges`. systemd owns the socket and each worker exits with its connection. If something already holds port 80, setup reports it and skips it.
+An `xcp-web.socket` systemd unit owns the port and hands each connection to a short-lived responder under `DynamicUser`, with `ProtectSystem=strict` and `NoNewPrivileges`. systemd owns the socket and each worker exits with its connection. If something already holds the port, setup reports it and skips the responder. Pick another port with `config port` to bring it back; the port is stored as `.xcp.web_port`.
 
 ## Troubleshooting
 
@@ -353,7 +357,7 @@ REALITY borrows the dest's handshake and hands it to the client. A domain can an
 A failure there names the dest. Switch it and re-test:
 
 ```bash
-./xcp.sh config dest   # try www.bing.com, dl.google.com, cdn.jsdelivr.net, www.cloudflare.com
+./xcp.sh config dest   # try www.cloudflare.com, dl.google.com, cdn.jsdelivr.net, www.speedtest.net
 ./xcp.sh user ls       # the SNI changed, so reimport the URIs
 ```
 

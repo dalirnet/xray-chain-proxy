@@ -10,11 +10,11 @@ Install and configure as exit node.
 ./xcp.sh setup gateway
 ```
 
-Installs Xray, applies the BBR network tuning, then prompts for ports and a DNS resolver.
+Installs Xray and applies the BBR network tuning. It then asks which client protocols to offer — both (the default), VLESS+REALITY only, or Shadowsocks only — and prompts for the ports of those protocols, VLESS (443) and Shadowsocks (8443), plus IP echo (80), DNS (53) and a DNS resolver. Enter keeps each default.
 
-Next comes REALITY: it asks for a `dest` domain (default `www.bing.com`), checks that the domain answers with TLS 1.3 and HTTP/2, and generates the x25519 keypair and `shortId`.
+With VLESS enabled, REALITY comes next: it asks for a `dest` domain (default `www.cloudflare.com`), checks that the domain answers with TLS 1.3 and HTTP/2, and generates the x25519 keypair and `shortId`.
 
-Finally it sets up SSH access for the chain — the `xcp` tunnel user, its password (generated when left empty), and a `Match User xcp` block in `sshd_config` — creates the initial `default` user, and starts the port 80 IP responder. Prints the host, SSH port, user and password that edge setup asks for.
+Finally it sets up SSH access for the chain — the `xcp` tunnel user, its password (generated when left empty), and a `Match User xcp` block in `sshd_config` — creates the initial `default` user, and starts the IP responder. Prints the host, SSH port, user and password that edge setup asks for.
 
 ![Setup Gateway](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/setup-gateway.gif)
 
@@ -26,11 +26,20 @@ Install and configure as entry node.
 ./xcp.sh setup edge
 ```
 
-Prompts for the gateway's SSH details (host, port, user, password), then local ports, a DNS resolver and a REALITY `dest` domain — each EDGE gets its own keypair, independent of the gateway's.
+Prompts for the gateway's SSH details (host, port, user, password), then the same protocol choice and ports as the gateway, a DNS resolver and — with VLESS enabled — a REALITY `dest` domain. Each EDGE picks its protocols and gets its own keypair, independent of the gateway's.
 
 It then starts the `xray-tunnel` service, fetches a page through it to confirm the gateway answers, and installs the `xray-tunnel-health.timer` that keeps checking every 60 seconds.
 
 ![Setup Edge](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/setup-edge.gif)
+
+### When setup stops early
+
+Setup that ends before Xray runs on the new config — an error, a failed check, or Ctrl+C — puts the server back the way it found it:
+
+- A fresh server returns to an empty state: config, units, tunnel password, `sshd` block, `xcp` user and newly opened firewall rules are removed
+- A re-run over a working install returns to that install: its config, units, `sshd_config`, the `xcp` user's password and resolver settings are restored, and the services that were running start again
+
+The Xray binary, apt packages and network tuning stay, so the next run skips the download. Setup then runs again from a clean start.
 
 ## Service Control
 
@@ -92,7 +101,7 @@ Output:
 
 ```
 Server: 5.6.7.8
-VLESS: 443 (REALITY → www.bing.com)
+VLESS: 443 (REALITY → www.cloudflare.com)
 Shadowsocks: 8443
 
 Accounts:
@@ -112,9 +121,9 @@ Add new user interactively.
 ```
 
 - Username: unique identifier
-- Password: leave empty to auto-generate
+- Password: leave empty to auto-generate (asked when Shadowsocks is enabled)
 
-One account covers both protocols: the password authenticates Shadowsocks and a generated UUID authenticates VLESS.
+One account covers every enabled protocol: the password authenticates Shadowsocks and a generated UUID authenticates VLESS. On a VLESS-only server the UUID is the whole credential, so there is no password prompt.
 
 With `qrencode` installed it prints a QR code — of the VLESS URI where REALITY is configured, since that is the one to reach for on a restricted network.
 
@@ -197,10 +206,11 @@ Config:
   Type:       edge
   Version:    3.x
   VLESS Port: 443
-  REALITY:    www.bing.com
+  REALITY:    www.cloudflare.com
   SS Port:    8443
+  Echo Port:  80
   SOCKS Port: 11080 (loopback)
-  DNS Port:   53 (loopback)
+  DNS Port:   53
   DNS Server: 1.1.1.1
   Log level:  error
   Gateway:    ssh://xcp@1.2.3.4:22
@@ -230,6 +240,38 @@ Each is also reachable directly, skipping the menu:
 ./xcp.sh config dest
 ```
 
+### `config port`
+
+Change the ports the server listens on.
+
+```bash
+./xcp.sh config port
+```
+
+```
+Listen Ports
+
+Current: VLESS:443 | SS:8443 | Echo:80 | DNS:53
+
+VLESS (REALITY) port (default: 443):
+Shadowsocks port (default: 8443):
+IP echo port (default: 80): 8080
+DNS port (default: 53): 5353
+```
+
+Each prompt defaults to the current port, so Enter keeps it.
+
+| Port        | Default | What moves with it                                                      |
+| ----------- | ------- | ----------------------------------------------------------------------- |
+| VLESS       | `443`   | The inbound and every VLESS share URI                                   |
+| Shadowsocks | `8443`  | The inbound and every SS share URI, with a TCP and a UDP firewall rule  |
+| IP echo     | `80`    | The `xcp-web.socket` unit                                               |
+| DNS         | `53`    | The `dns-in` inbound, and the `dns add` firewall rules for each client  |
+
+The DNS port is where this server listens. Upstream resolvers and client queries routed through the chain still use 53.
+
+Only the enabled protocols are asked about. Every port must be distinct and free, and must stay clear of the fixed loopback ports `10080`, `10085`, `11080` and `11081`. The command checks both before it writes anything, and opens the new ports when `ufw` is active. A moved VLESS or Shadowsocks port reissues the share URIs — run `user ls` and reimport them.
+
 ### `config dest`
 
 Change the site REALITY borrows its handshake from.
@@ -242,7 +284,7 @@ Answering TLS 1.3 with HTTP/2 makes a domain a candidate; completing a handshake
 
 The SNI in every share URI is this name, so changing it reissues the URIs — run `user ls` and reimport them.
 
-Known good: `www.bing.com`, `dl.google.com`, `cdn.jsdelivr.net`, `www.cloudflare.com`.
+Known good: `www.cloudflare.com`, `dl.google.com`, `cdn.jsdelivr.net`, `www.speedtest.net`.
 
 The DNS menu offers Cloudflare, Google and Quad9, two DoH endpoints, or a custom address. On an EDGE the choice is rewritten to `tcp://` so queries fit through the tunnel; a DoH URL is kept as typed. The change restarts Xray.
 
@@ -295,7 +337,7 @@ Allow a client, by address or CIDR block.
 ./xcp.sh dns add                    # prompts
 ```
 
-The first allowed client binds `dns-in` to `0.0.0.0` and writes the matching `ufw` rules for 53/tcp and 53/udp.
+The first allowed client binds `dns-in` to `0.0.0.0` and writes the matching `ufw` rules for the DNS port (53 by default), TCP and UDP. Changing the port with `config port` moves these rules along with it.
 
 `ufw` must be active — it is what enforces the list. While it is inactive the resolver stays on loopback and reports that. Prefixes shorter than `/8` prompt for confirmation.
 

@@ -36,14 +36,24 @@ Isolated networks block many websites. This tool creates a chain:
 
 ## Supported Protocols
 
-Both roles serve the same two protocols:
+Each server offers one or both protocols — setup asks, and enables both by default:
 
 | Protocol        | Port | Method/Auth   | Best For                         |
 | --------------- | ---- | ------------- | -------------------------------- |
 | VLESS + REALITY | 443  | UUID + x25519 | Restricted networks, UDP, mobile |
 | Shadowsocks     | 8443 | `aes-256-gcm` | Mobile apps, best compatibility  |
 
-> One account covers both. Shadowsocks derives its key from the password, and VLESS sends its UUID inside the encrypted handshake.
+> One account covers every enabled protocol. Shadowsocks derives its key from the password, and VLESS sends its UUID inside the encrypted handshake.
+
+```
+Client protocols:
+  1) Both VLESS+REALITY and Shadowsocks
+  2) VLESS+REALITY only
+  3) Shadowsocks only
+Select (1-3, default: 1):
+```
+
+A server with one protocol skips everything the other needs: Shadowsocks-only skips REALITY entirely, and VLESS-only opens no UDP port and asks no account password.
 
 ### Ports
 
@@ -58,6 +68,8 @@ Both roles serve the same two protocols:
 | `10085` | Loopback | Loopback | Xray stats API                        |
 | `11080` | Loopback | Loopback | No-auth SOCKS5 for diagnostics        |
 
+`80`, `443`, `8443` and `53` are defaults: setup asks for each, and [`config port`](commands.md#config-port) changes them later. The firewall rules follow whichever ports you choose.
+
 Open on the provider firewall — the same rules on both roles:
 
 ```
@@ -71,11 +83,12 @@ REALITY holds 443 because that is what makes the disguise work: handshakes from 
 
 ## Features
 
-- **VLESS+REALITY and Shadowsocks** - two client protocols, neither sending a credential in the clear
+- **VLESS+REALITY and Shadowsocks** - two client protocols, both or either one, neither sending a credential in the clear
 - **SSH chain link** - EDGE logs in to GATEWAY with a password and forwards a port
 - **Dedicated tunnel user** - GATEWAY creates a shell-less `xcp` user for the link
 - **Link health checks** - the tunnel is fetched through every 60s, and restarted when it stops carrying traffic
 - **DNS built in** - Loopback port 53 on both servers, resolver switchable to DoH
+- **Custom ports** - VLESS, Shadowsocks, IP echo and DNS each take any port
 - **Chain architecture** - Multiple hops for reliability and privacy
 - **Strong encryption** - AES-256-GCM for clients, SSH for the chain
 - **User management** - Unlimited accounts with QR codes
@@ -117,7 +130,7 @@ You'll configure:
 - VLESS (REALITY) port (default: 443)
 - Shadowsocks port (default: 8443)
 - DNS resolver (default: 1.1.1.1)
-- REALITY dest domain (default: `www.bing.com`) — checked for TLS 1.3 and HTTP/2 before it is accepted
+- REALITY dest domain (default: `www.cloudflare.com`) — checked for TLS 1.3 and HTTP/2 before it is accepted
 - Tunnel SSH password — press Enter to generate a 32-character one
 
 Setup creates the `xcp` SSH user with that password, allows it in `sshd_config`, and prints everything the EDGE needs:
@@ -132,7 +145,7 @@ Use on EDGE server (setup edge):
   SSH Pass:   kQ8vR2mZ...
 
 Direct client access:
-  VLESS Port: 443 (REALITY, borrowing www.bing.com)
+  VLESS Port: 443 (REALITY, borrowing www.cloudflare.com)
   SS Port:    8443
   Username:   default
   Password:   xxxxxxxxxxxxxxxx
@@ -168,7 +181,7 @@ The script tests the login, starts the `xray-tunnel` service, fetches a page thr
 Import the URI from `./xcp.sh user ls` or scan the QR code from `./xcp.sh user add`. v2rayNG, Hiddify, Streisand, NekoBox, v2rayN and sing-box all read it directly:
 
 ```
-vless://<uuid>@SERVER_IP:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.bing.com&fp=chrome&pbk=<public key>&sid=<shortId>&spx=%2F#name
+vless://<uuid>@SERVER_IP:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.cloudflare.com&fp=chrome&pbk=<public key>&sid=<shortId>&spx=%2F#name
 ```
 
 To enter it by hand:
