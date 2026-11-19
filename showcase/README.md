@@ -34,7 +34,7 @@ Setup checks the login, brings up the `xray-tunnel` service, and fetches a page 
 
 Add a client account to the edge server. Enter a username and optionally a password (leave empty to auto-generate). One account covers every enabled protocol — the password authenticates Shadowsocks and a generated UUID authenticates VLESS. A VLESS-only server asks for no password.
 
-The output includes the server IP, ports, credentials, a QR code of the VLESS link for mobile apps, and a share URI per protocol to copy into a client.
+The output includes the server IP, ports, credentials, and a QR code and share URI for each enabled protocol — scan one with a mobile app or copy the URI into a client. `user ls --qr` shows them again later.
 
 ```bash
 ./xcp.sh user add

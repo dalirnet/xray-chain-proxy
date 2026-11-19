@@ -306,6 +306,8 @@ run_user_add() {
     echo "$QR"
     echo "VLESS URI: ${DEMO_VLESS}"
     echo ""
+    sleep 0.4
+    echo "$QR"
     echo "SS URI: ${DEMO_URI}"
     sleep 0.1
 }
@@ -475,7 +477,7 @@ case "${1:-}" in
         DEMOS=(
             "setup-gateway:61"
             "setup-edge:59"
-            "user-add:33"
+            "user-add:46"
             "status:13"
             "stats:12"
             "test:20"
