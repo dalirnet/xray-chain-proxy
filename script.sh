@@ -28,6 +28,8 @@
 #   Loopback:  53 (dns), 10080 (tunnel), 10085 (stats api),
 #              11080 (no-auth socks5 for diagnostics)
 #
+# 80, 443, 8443 and 53 are defaults - setup and `config port` change them.
+#
 # Author: Amir Reza Dalir (dalirnet@gmail.com)
 # License: MIT
 #
@@ -89,20 +91,26 @@ readonly TUNNEL_PORT=10080
 readonly DEFAULT_SSH_PORT=22
 readonly TUNNEL_SSH_USER="xcp"
 
+# Every systemd unit this script installs. Setup stops them before it checks
+# ports, and a failed setup puts each back the way it found it.
+readonly XCP_UNITS=(xray.service xray-tunnel.service xray-tunnel-health.timer xcp-web.socket)
+
 # Xray's stats API, loopback only - `stats` reads per-user counters from it
 readonly API_PORT=10085
 
 # Kernel tuning for the border hop
 readonly SYSCTL_DROPIN="/etc/sysctl.d/99-xcp.conf"
 
-# Default ports. Both roles listen on the same set, so one provider firewall
-# rule covers them: 22, 80, 443, 8443.
-#
 # Shadowsocks sits on 8443, which reads as alternate HTTPS and stays open on
 # networks that close uncommon ports. Its canonical 8388 heads every block list
 # and was measured blocked on a censored path where 8443 carried traffic.
 readonly DEFAULT_SS_PORT=8443
+
+# The port dns-in listens on. Custom ports live on the inbound itself.
 readonly DEFAULT_DNS_PORT=53
+# The port resolvers answer on. Fixed: it is the far side of every query - the
+# upstream the resolver forwards to, and what client queries are addressed to.
+readonly DNS_UPSTREAM_PORT=53
 
 # No-auth SOCKS5 on loopback, for `test` and for curl on the server itself.
 # Never firewalled open, and no part of user management.
@@ -116,13 +124,15 @@ readonly LOCAL_SOCKS_PORT=11080
 # recognise to the real dest site, so a prober gets a genuine TLS 1.3 answer with
 # a valid certificate chain - which only reads as ordinary on the port HTTPS uses.
 readonly DEFAULT_VLESS_PORT=443
-# The dest lends REALITY its handshake, so it has to chain with what current
-# clients send. www.microsoft.com answers TLS 1.3 with HTTP/2 yet returns a
-# server hello REALITY cannot reuse - measured on Xray 26, the handshake never
-# completes and every client is dropped before its uuid is read. Swap a dest
-# with `config dest`; reality_verify_chain is what tells them apart.
-readonly DEFAULT_REALITY_DEST="www.bing.com"
-readonly REALITY_DEST_ALTERNATIVES="www.bing.com, dl.google.com, cdn.jsdelivr.net, www.cloudflare.com"
+# The dest lends REALITY its handshake, so it has to answer TLS 1.3 with HTTP/2
+# from the server itself, and which sites do depends on where the server sits.
+# Measured on Xray 26 from an Iranian edge: www.bing.com stopped answering
+# TLS 1.3 with HTTP/2, so REALITY relayed Bing's real certificate to every
+# client and none got past the handshake, while www.cloudflare.com and the
+# alternatives below completed it. Swap a dest with `config dest`;
+# reality_verify_chain is what tells a working one apart.
+readonly DEFAULT_REALITY_DEST="www.cloudflare.com"
+readonly REALITY_DEST_ALTERNATIVES="www.cloudflare.com, dl.google.com, cdn.jsdelivr.net, www.speedtest.net"
 readonly REALITY_FLOW="xtls-rprx-vision"
 
 # Loopback port the REALITY handshake check listens on, held only while it runs
@@ -131,8 +141,8 @@ readonly REALITY_PROBE_PORT=11081
 # Port 80 answers with the caller's own IP, so `curl http://server` reports the
 # address a connection arrives from. systemd owns the socket and hands each
 # connection to a short-lived unprivileged responder, which keeps a web server
-# out of the picture entirely.
-readonly WEB_PORT=80
+# out of the picture entirely. A custom port is kept in xcp.web_port.
+readonly DEFAULT_WEB_PORT=80
 readonly WEB_SOCKET="/etc/systemd/system/xcp-web.socket"
 readonly WEB_SERVICE="/etc/systemd/system/xcp-web@.service"
 readonly WEB_RESPONDER="${XRAY_DIR}/ip-echo.sh"
@@ -176,35 +186,6 @@ check_root() {
 # Check if systemd is available
 check_systemd() {
     command -v systemctl &>/dev/null || log_error "systemd is required"
-}
-
-# --- Guards ---
-# Shared preconditions. Each reports the reason and exits, so the commands that
-# use them read as a list of requirements rather than a stack of tests.
-
-require_xray() {
-    [[ -f "$XRAY_BIN" ]] || log_error "Xray not installed"
-}
-
-require_config() {
-    [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
-}
-
-require_accounts() {
-    require_config
-    jq -e '.inbounds[] | select(.tag == "ss-in") | .settings.clients' "$XRAY_CONFIG" &>/dev/null || \
-        log_error "No accounts configured"
-}
-
-require_tunnel() {
-    [[ -f "$TUNNEL_SERVICE" ]] || log_error "No tunnel configured"
-}
-
-# Link commands only apply to edge servers
-require_edge() {
-    require_config
-    [[ "$(jq -r '.xcp.type // "unknown"' "$XRAY_CONFIG")" == "edge" ]] || \
-        log_error "Only EDGE servers link to a gateway"
 }
 
 # Validate port number (1-65535)
@@ -261,6 +242,78 @@ validate_dns() {
     esac
 }
 
+# --- Guards ---
+# Shared preconditions. Each reports the reason and exits, so the commands that
+# use them read as a list of requirements rather than a stack of tests.
+
+require_xray() {
+    [[ -f "$XRAY_BIN" ]] || log_error "Xray not installed"
+}
+
+require_config() {
+    [[ -f "$XRAY_CONFIG" ]] || log_error "Config not found"
+}
+
+require_accounts() {
+    require_config
+    jq -e --arg t "$(accounts_inbound)" '.inbounds[] | select(.tag == $t) | .settings.clients' "$XRAY_CONFIG" &>/dev/null || \
+        log_error "No accounts configured"
+}
+
+require_tunnel() {
+    [[ -f "$TUNNEL_SERVICE" ]] || log_error "No tunnel configured"
+}
+
+# Link commands only apply to edge servers
+require_edge() {
+    require_config
+    [[ "$(jq -r '.xcp.type // "unknown"' "$XRAY_CONFIG")" == "edge" ]] || \
+        log_error "Only EDGE servers link to a gateway"
+}
+
+# --- Configured ports ---
+# Read from the config, falling back to the defaults for configs that predate
+# custom ports or for a server that is not set up yet.
+
+# The port dns-in listens on
+cfg_dns_port() {
+    local config="${1:-$XRAY_CONFIG}" port=""
+    [[ -f "$config" ]] && \
+        port=$(jq -r '[.inbounds[]? | select(.tag == "dns-in") | .port][0] // empty' "$config" 2>/dev/null || true)
+    echo "${port:-$DEFAULT_DNS_PORT}"
+}
+
+# The port the IP echo socket answers on
+cfg_web_port() {
+    local config="${1:-$XRAY_CONFIG}" port=""
+    [[ -f "$config" ]] && \
+        port=$(jq -r '.xcp.web_port // empty' "$config" 2>/dev/null || true)
+    echo "${port:-$DEFAULT_WEB_PORT}"
+}
+
+# The port of a client inbound by tag, or nothing when that protocol is off
+cfg_inbound_port() {
+    local tag="$1" config="${2:-$XRAY_CONFIG}"
+    [[ -f "$config" ]] || return 0
+    jq -r --arg t "$tag" '[.inbounds[]? | select(.tag == $t) | .port][0] // empty' "$config" 2>/dev/null || true
+}
+
+cfg_ss_port()    { cfg_inbound_port ss-in "${1:-}"; }
+cfg_vless_port() { cfg_inbound_port vless-in "${1:-}"; }
+
+# The inbound whose client list is the source of truth for accounts.
+# Shadowsocks clients carry everything - email, password and the VLESS uuid -
+# so they lead whenever Shadowsocks is on. A VLESS-only server keeps its
+# accounts on the VLESS inbound, where email and uuid are all there is.
+accounts_inbound() {
+    local config="${1:-$XRAY_CONFIG}"
+    if [[ -n "$(cfg_ss_port "$config")" ]]; then
+        echo "ss-in"
+    else
+        echo "vless-in"
+    fi
+}
+
 # --- Utilities ---
 
 # A UUID for a VLESS client. The kernel exposes one directly, so this avoids
@@ -284,6 +337,11 @@ generate_password() {
 # URL-safe base64 encoding
 base64_urlsafe() {
     echo -n "$1" | base64 | tr '+/' '-_' | tr -d '='
+}
+
+# True when no two arguments are the same port
+ports_distinct() {
+    [[ $(printf '%s\n' "$@" | sort -u | wc -l) -eq $# ]]
 }
 
 # Format bytes to human readable
@@ -414,6 +472,46 @@ prompt_dns() {
     done
 }
 
+# Ask which client protocols the server offers. Sets USE_VLESS and USE_SS in
+# the caller to true or false.
+prompt_protocols() {
+    local choice
+
+    echo "Client protocols:"
+    echo "  1) Both VLESS+REALITY and Shadowsocks"
+    echo "  2) VLESS+REALITY only"
+    echo "  3) Shadowsocks only"
+
+    while true; do
+        read -rp "Select (1-3, default: 1): " choice
+        case "${choice:-1}" in
+            1) USE_VLESS=true;  USE_SS=true;  break ;;
+            2) USE_VLESS=true;  USE_SS=false; break ;;
+            3) USE_VLESS=false; USE_SS=true;  break ;;
+            *) echo -e "${RED}Choose 1, 2 or 3${NC}" ;;
+        esac
+    done
+}
+
+# Ask for every port setup lets you choose, until no two collide with each other
+# or with the fixed loopback ports. Reads USE_VLESS and USE_SS, and sets
+# VLESS_PORT, SS_PORT, WEB_PORT and DNS_PORT in the caller - the port of a
+# protocol that is off stays empty.
+prompt_setup_ports() {
+    while true; do
+        VLESS_PORT="" SS_PORT=""
+        [[ "$USE_VLESS" == "true" ]] && prompt_port "VLESS (REALITY) port" "$DEFAULT_VLESS_PORT" VLESS_PORT
+        [[ "$USE_SS" == "true" ]] && prompt_port "Shadowsocks port" "$DEFAULT_SS_PORT" SS_PORT
+        prompt_port "IP echo port" "$DEFAULT_WEB_PORT" WEB_PORT
+        prompt_port "DNS port" "$DEFAULT_DNS_PORT" DNS_PORT
+
+        ports_distinct ${VLESS_PORT:+"$VLESS_PORT"} ${SS_PORT:+"$SS_PORT"} "$WEB_PORT" "$DNS_PORT" \
+            "$API_PORT" "$TUNNEL_PORT" "$LOCAL_SOCKS_PORT" "$REALITY_PROBE_PORT" && break
+
+        echo -e "${RED}Each port must be different, and not one of ${API_PORT}, ${TUNNEL_PORT}, ${LOCAL_SOCKS_PORT}, ${REALITY_PROBE_PORT}${NC}"
+    done
+}
+
 # --- Installation ---
 
 # Check and install dependencies
@@ -445,7 +543,8 @@ check_dependencies() {
     log_success "Dependencies ready"
 }
 
-# Install Xray-core
+# Install Xray-core. The unit is written on every run, kept or reinstalled,
+# so a binary left behind by an earlier run never ends up without a service.
 install_xray() {
     log_step "Installing Xray-core"
 
@@ -453,7 +552,10 @@ install_xray() {
         local ver=$("$XRAY_BIN" version 2>/dev/null | head -1 | awk '{print $2}' || echo "unknown")
         log_info "Xray already installed (v$ver)"
         read -rp "Reinstall? [y/N]: " ans
-        [[ "$ans" =~ ^[Yy]$ ]] || return 0
+        if [[ ! "$ans" =~ ^[Yy]$ ]]; then
+            write_xray_service
+            return 0
+        fi
     fi
 
     local arch=$(get_arch)
@@ -482,7 +584,15 @@ install_xray() {
         log_info "Skipping geo data download"
     fi
 
-    # Create systemd service
+    write_xray_service
+
+    log_success "Xray installed: $version"
+}
+
+# Write and enable the Xray systemd unit
+write_xray_service() {
+    mkdir -p "$LOG_DIR"
+
     cat > "$XRAY_SERVICE" << 'EOF'
 [Unit]
 Description=Xray Service
@@ -508,8 +618,6 @@ EOF
 
     systemctl daemon-reload
     systemctl enable xray --quiet 2>/dev/null || true
-
-    log_success "Xray installed: $version"
 }
 
 # Validate Xray configuration
@@ -530,7 +638,9 @@ config_write() {
 
     cat > "$tmp"
 
-    if ! jq -e . "$tmp" &>/dev/null; then
+    # Empty is checked on its own: some jq builds (1.6, as Debian ships it)
+    # accept empty input under -e and exit 0
+    if [[ ! -s "$tmp" ]] || ! jq -e . "$tmp" &>/dev/null; then
         rm -f "$tmp"
         log_error "Config rewrite produced invalid JSON - the original is untouched"
     fi
@@ -567,6 +677,14 @@ configure_firewall() {
         port="${spec%%/*}"
         proto="tcp"
         [[ "$spec" == */* ]] && proto="${spec#*/}"
+
+        # During setup, remember rules that were not there before, so a failed
+        # run closes exactly those and leaves every rule it found alone
+        if [[ -n "$ROLLBACK_DIR" ]] && \
+           ! ufw status 2>/dev/null | grep -qE "^${port}/${proto}[[:space:]]"; then
+            echo "${port}/${proto}" >> "${ROLLBACK_DIR}/ufw"
+        fi
+
         ufw allow "${port}/${proto}" &>/dev/null || true
     done
 
@@ -577,18 +695,23 @@ configure_firewall() {
 #
 # Setup rewrites the config and restarts everything anyway, so our own services
 # are stopped first - otherwise a re-run would flag the ports this server
-# already holds. Whatever is left is a genuine clash, and naming it here beats
-# the generic "Xray failed to start" it would otherwise become.
+# already holds, the echo socket on 80 included. The health timer goes too, or
+# it could restart the tunnel and Xray halfway through setup. Whatever is left
+# is a genuine clash, and naming it here beats the generic "Xray failed to
+# start" it would otherwise become. A failed setup starts them all again.
 #
 # Port 53 is left out: systemd-resolved parks on 127.0.0.53, which is a
 # different address, and free_dns_port handles the cases that do collide.
+# A custom DNS port gets no such help, so callers pass it in like the rest.
 preflight_ports() {
     local port busy=()
 
-    command -v ss &>/dev/null || return 0
+    local unit
+    for unit in "${XCP_UNITS[@]}"; do
+        systemctl stop "$unit" 2>/dev/null || true
+    done
 
-    systemctl stop xray 2>/dev/null || true
-    systemctl stop xray-tunnel 2>/dev/null || true
+    command -v ss &>/dev/null || return 0
 
     for port in "$@"; do
         port_taken "$port" && busy+=("$port")
@@ -672,16 +795,23 @@ port_taken() {
 # so the two normally coexist. Some images still put dnsmasq or a resolver on
 # 127.0.0.1:53 - only then turn the stub off and point the system at the real
 # resolvers it already tracks, so name resolution keeps working here.
+#
+# A custom DNS port is checked by preflight_ports like any other port, and the
+# stub never sits on it, so there is nothing to free.
 free_dns_port() {
+    local port="${1:-$DEFAULT_DNS_PORT}"
+
+    [[ "$port" == "$DNS_UPSTREAM_PORT" ]] || return 0
+
     # Without ss the answer is unknown, so hand the port over rather than risk
     # a clash Xray would only report as a failed start
-    if command -v ss &>/dev/null && ! port_taken "$DEFAULT_DNS_PORT"; then
+    if command -v ss &>/dev/null && ! port_taken "$port"; then
         return 0
     fi
 
     systemctl is-active systemd-resolved &>/dev/null || return 0
 
-    log_info "Freeing port ${DEFAULT_DNS_PORT} from systemd-resolved..."
+    log_info "Freeing port ${port} from systemd-resolved..."
 
     mkdir -p "$(dirname "$RESOLVED_DROPIN")"
     cat > "$RESOLVED_DROPIN" << EOF
@@ -696,7 +826,7 @@ EOF
         ln -sf /run/systemd/resolve/resolv.conf /etc/resolv.conf
     fi
 
-    log_success "Port ${DEFAULT_DNS_PORT} is free"
+    log_success "Port ${port} is free"
 }
 
 # Give the stub listener back (uninstall)
@@ -757,16 +887,16 @@ RESPONDER
     chmod 755 "$WEB_RESPONDER"
 }
 
-# Install the socket and its per-connection responder.
-# The responder faces the internet, so it runs as nobody with the filesystem
-# read-only and privilege escalation off - systemd binds the privileged port
-# and the responder never needs root.
-# Install the socket and its per-connection responder.
+# Install the socket and its per-connection responder on the given port.
 #
-# DynamicUser gives each worker a transient unprivileged identity, which systemd
-# prefers over `User=nobody` - nobody is shared with every other service that
-# picks it, and systemd warns about exactly that.
+# The responder faces the internet, so it runs with the filesystem read-only and
+# privilege escalation off - systemd binds the privileged port and the responder
+# never needs root. DynamicUser gives each worker a transient unprivileged
+# identity, which systemd prefers over `User=nobody` - nobody is shared with
+# every other service that picks it, and systemd warns about exactly that.
 web_install() {
+    local port="${1:-$DEFAULT_WEB_PORT}"
+
     web_write_responder
 
     cat > "$WEB_SOCKET" << EOF
@@ -775,7 +905,7 @@ Description=Xray Chain Proxy IP Echo Socket
 Documentation=https://github.com/dalirnet/xray-chain-proxy
 
 [Socket]
-ListenStream=${WEB_PORT}
+ListenStream=${port}
 Accept=yes
 
 [Install]
@@ -805,9 +935,9 @@ EOF
     systemctl enable xcp-web.socket --quiet 2>/dev/null || true
 
     if systemctl restart xcp-web.socket 2>/dev/null; then
-        log_success "Port ${WEB_PORT} answers with the caller's IP"
+        log_success "Port ${port} answers with the caller's IP"
     else
-        log_warn "Port ${WEB_PORT} is already in use - skipping the IP responder"
+        log_warn "Port ${port} is already in use - skipping the IP responder"
         systemctl disable xcp-web.socket --quiet 2>/dev/null || true
         rm -f "$WEB_SOCKET" "$WEB_SERVICE"
         systemctl daemon-reload
@@ -1324,7 +1454,6 @@ def insert_rules($new):
     end;
 '
 
-# Generate GATEWAY configuration
 # The VLESS inbound, or nothing when REALITY is unconfigured. Carries its own
 # trailing comma so it can sit in front of the other client inbounds.
 gen_vless_inbound() {
@@ -1406,11 +1535,39 @@ gen_observability() {
 EOF
 }
 
+# The Shadowsocks inbound, or nothing when ss_port is empty. Like the VLESS
+# inbound it carries its own trailing comma.
+gen_ss_inbound() {
+    local clients="$1" port="$2"
+
+    [[ -n "$port" ]] || return 0
+
+    cat << EOF
+    {
+      "tag": "ss-in",
+      "port": ${port},
+      "protocol": "shadowsocks",
+      "settings": {
+        "clients": ${clients},
+        "network": "tcp,udp"
+      },
+      "sniffing": {
+        "enabled": true,
+        "destOverride": ["http", "tls"]
+      }
+    },
+EOF
+}
+
 # The inbounds both roles share: the stats hook, the loopback resolver, and the
 # client protocols. Closes the inbounds array, so the last entry carries no
 # trailing comma and anything role-specific goes in front of it.
+#
+# Each client protocol is optional: an empty ss_port leaves Shadowsocks out, and
+# an empty reality leaves VLESS out. clients is the account list either one
+# draws from.
 gen_common_inbounds() {
-    local dns_ip="$1" ss_port="$2" ss_clients="$3" reality="$4"
+    local dns_ip="$1" ss_port="$2" clients="$3" reality="$4" dns_port="${5:-$DEFAULT_DNS_PORT}"
 
     cat << EOF
     {
@@ -1424,29 +1581,17 @@ gen_common_inbounds() {
     },
     {
       "tag": "dns-in",
-      "port": ${DEFAULT_DNS_PORT},
+      "port": ${dns_port},
       "listen": "127.0.0.1",
       "protocol": "dokodemo-door",
       "settings": {
         "address": "${dns_ip}",
-        "port": ${DEFAULT_DNS_PORT},
+        "port": ${DNS_UPSTREAM_PORT},
         "network": "tcp,udp"
       }
     },
-$(gen_vless_inbound "$ss_clients" "$reality")
-    {
-      "tag": "ss-in",
-      "port": ${ss_port},
-      "protocol": "shadowsocks",
-      "settings": {
-        "clients": ${ss_clients},
-        "network": "tcp,udp"
-      },
-      "sniffing": {
-        "enabled": true,
-        "destOverride": ["http", "tls"]
-      }
-    },
+$(gen_vless_inbound "$clients" "$reality")
+$(gen_ss_inbound "$clients" "$ss_port")
     {
       "tag": "local-in",
       "port": ${LOCAL_SOCKS_PORT},
@@ -1464,11 +1609,14 @@ $(gen_vless_inbound "$ss_clients" "$reality")
 EOF
 }
 
-# Clients arrive over VLESS+REALITY or Shadowsocks, both of which authenticate
-# without sending a credential in the clear. The only SOCKS5 here is no-auth on
+# Generate GATEWAY configuration.
+# Clients arrive over VLESS+REALITY, Shadowsocks or both, each authenticating
+# without sending a credential in the clear. An empty ss_port leaves Shadowsocks
+# out and an empty reality leaves VLESS out. The only SOCKS5 here is no-auth on
 # loopback, for diagnostics.
 gen_gateway_config() {
-    local ss_port="$1" ss_clients="$2" dns="${3:-$DEFAULT_DNS}" reality="${4:-}"
+    local ss_port="$1" clients="$2" dns="${3:-$DEFAULT_DNS}" reality="${4:-}"
+    local dns_port="${5:-$DEFAULT_DNS_PORT}" web_port="${6:-$DEFAULT_WEB_PORT}"
     local dns_ip=$(dns_ip "$dns")
 
     cat << EOF
@@ -1477,6 +1625,7 @@ gen_gateway_config() {
     "type": "gateway",
     "version": "${VERSION}",
     "dns": "${dns}",
+    "web_port": ${web_port},
     "reality": $(gen_reality_meta "$reality")
   },
   "dns": {
@@ -1499,7 +1648,7 @@ $(gen_observability)
         "destOverride": ["http", "tls"]
       }
     },
-$(gen_common_inbounds "$dns_ip" "$ss_port" "$ss_clients" "$reality")
+$(gen_common_inbounds "$dns_ip" "$ss_port" "$clients" "$reality" "$dns_port")
   ],
   "outbounds": [
     {
@@ -1543,7 +1692,8 @@ EOF
 # The gateway is always reached through the SSH tunnel's local SOCKS port,
 # so gw_host/gw_port/ssh_user are metadata only (used by 'link ls' and rebuilds).
 gen_edge_config() {
-    local ss_port="$1" ss_clients="$2" gw_host="$3" gw_port="$4" ssh_user="$5" dns="${6:-$DEFAULT_DNS}" reality="${7:-}"
+    local ss_port="$1" clients="$2" gw_host="$3" gw_port="$4" ssh_user="$5" dns="${6:-$DEFAULT_DNS}" reality="${7:-}"
+    local dns_port="${8:-$DEFAULT_DNS_PORT}" web_port="${9:-$DEFAULT_WEB_PORT}"
     # The tunnel carries TCP only, so queries must not leave over UDP
     local dns_server=$(dns_over_tcp "$dns")
     local dns_ip=$(dns_ip "$dns")
@@ -1554,6 +1704,7 @@ gen_edge_config() {
     "type": "edge",
     "version": "${VERSION}",
     "dns": "${dns}",
+    "web_port": ${web_port},
     "reality": $(gen_reality_meta "$reality"),
     "link": {
       "protocol": "ssh",
@@ -1568,7 +1719,7 @@ gen_edge_config() {
   },
 $(gen_observability)
   "inbounds": [
-$(gen_common_inbounds "$dns_ip" "$ss_port" "$ss_clients" "$reality")
+$(gen_common_inbounds "$dns_ip" "$ss_port" "$clients" "$reality" "$dns_port")
   ],
   "outbounds": [
     {
@@ -1615,7 +1766,7 @@ $(gen_common_inbounds "$dns_ip" "$ss_port" "$ss_clients" "$reality")
       {
         "type": "field",
         "network": "udp",
-        "port": ${DEFAULT_DNS_PORT},
+        "port": ${DNS_UPSTREAM_PORT},
         "outboundTag": "dns-out"
       },
       {
@@ -1658,7 +1809,247 @@ gen_vless_uri() {
     echo "vless://${id}@${server}:${port}?encryption=none&security=reality&type=tcp&flow=${REALITY_FLOW}&sni=${sni}&fp=chrome&pbk=${pbk}&sid=${sid}&spx=%2F#${name:-Proxy}"
 }
 
+# --- Setup rollback ---
+#
+# Setup changes a server in many places - units, config, sshd, the tunnel user,
+# the resolver stub, firewall rules - and stops what is already running before
+# it checks ports. Exiting halfway, on an error or a Ctrl+C, would leave a mix
+# of old and new that the next run trips over. So setup snapshots everything it
+# can touch first, and an EXIT trap restores that snapshot unless setup reaches
+# its end: a fresh server returns to having nothing, and a re-run over a working
+# install returns to that install, running.
+#
+# The Xray binary, apt packages and network tuning stay. They are additive, and
+# keeping them spares the next run a download.
+
+# Files setup may create or rewrite. /etc/resolv.conf is a symlink that
+# free_dns_port repoints, and cp -a snapshots the link itself.
+readonly ROLLBACK_FILES=(
+    "$XRAY_CONFIG" "$XRAY_SERVICE"
+    "$TUNNEL_SERVICE" "$TUNNEL_HEALTH_SERVICE" "$TUNNEL_HEALTH_TIMER"
+    "$TUNNEL_PASS_FILE" "$TUNNEL_KNOWN_HOSTS"
+    "$WEB_SOCKET" "$WEB_SERVICE" "$WEB_RESPONDER"
+    "$RESOLVED_DROPIN" /etc/resolv.conf /etc/ssh/sshd_config
+)
+
+ROLLBACK_DIR=""
+ROLLBACK_PID=""
+
+# True when two paths hold the same thing - the same link target for symlinks,
+# the same bytes otherwise, and "both absent" counts as the same
+same_path() {
+    local a="$1" b="$2"
+    [[ ! -e "$a" && ! -L "$a" && ! -e "$b" && ! -L "$b" ]] && return 0
+    if [[ -L "$a" || -L "$b" ]]; then
+        [[ -L "$a" && -L "$b" && "$(readlink "$a")" == "$(readlink "$b")" ]]
+        return
+    fi
+    [[ -f "$a" && -f "$b" ]] && cmp -s "$a" "$b"
+}
+
+# Take the snapshot and arm the trap. Called once, at the top of setup.
+setup_begin() {
+    local i f unit
+
+    ROLLBACK_DIR=$(mktemp -d /tmp/xcp-rollback.XXXXXX)
+    ROLLBACK_PID=$BASHPID
+    chmod 700 "$ROLLBACK_DIR"
+
+    for i in "${!ROLLBACK_FILES[@]}"; do
+        f="${ROLLBACK_FILES[$i]}"
+        if [[ -e "$f" || -L "$f" ]]; then
+            cp -a "$f" "${ROLLBACK_DIR}/file.$i"
+        fi
+    done
+
+    for unit in "${XCP_UNITS[@]}"; do
+        systemctl is-active --quiet "$unit" 2>/dev/null && echo "$unit" >> "${ROLLBACK_DIR}/active"
+        systemctl is-enabled --quiet "$unit" 2>/dev/null && echo "$unit" >> "${ROLLBACK_DIR}/enabled"
+    done
+    touch "${ROLLBACK_DIR}/active" "${ROLLBACK_DIR}/enabled"
+
+    # The tunnel user's password hash: setup resets the password, and the edges
+    # already linked to this gateway hold the old one
+    if id -u "$TUNNEL_SSH_USER" &>/dev/null; then
+        touch "${ROLLBACK_DIR}/user"
+        command -v getent &>/dev/null && \
+            getent shadow "$TUNNEL_SSH_USER" 2>/dev/null | cut -d: -f2 > "${ROLLBACK_DIR}/user.hash"
+    fi
+
+    trap 'setup_rollback' EXIT
+    trap 'exit 130' INT TERM
+}
+
+# Setup reached its end - keep everything it did
+setup_commit() {
+    trap - EXIT INT TERM
+    [[ -n "$ROLLBACK_DIR" ]] && rm -rf "$ROLLBACK_DIR"
+    ROLLBACK_DIR=""
+}
+
+# Put the server back the way setup_begin found it. Runs from the EXIT trap,
+# so it must not exit early itself - every step tolerates failure.
+setup_rollback() {
+    local rc=$?
+
+    # Command substitutions run in subshells; only the setup shell rolls back
+    [[ -n "$ROLLBACK_DIR" && "$BASHPID" == "$ROLLBACK_PID" ]] || return 0
+
+    trap - EXIT INT TERM
+    set +e
+
+    echo
+    log_warn "Setup did not finish - undoing its changes"
+
+    local unit i f snap restored=() sshd_changed=false resolved_changed=false
+
+    for unit in "${XCP_UNITS[@]}"; do
+        systemctl stop "$unit" &>/dev/null
+    done
+
+    for i in "${!ROLLBACK_FILES[@]}"; do
+        f="${ROLLBACK_FILES[$i]}"
+        snap="${ROLLBACK_DIR}/file.$i"
+        same_path "$f" "$snap" && continue
+
+        rm -f "$f"
+        [[ -e "$snap" || -L "$snap" ]] && cp -a "$snap" "$f"
+        restored+=("$f")
+
+        [[ "$f" == /etc/ssh/sshd_config ]] && sshd_changed=true
+        [[ "$f" == "$RESOLVED_DROPIN" || "$f" == /etc/resolv.conf ]] && resolved_changed=true
+    done
+
+    # The tunnel user: removed when this run created it, its password put back
+    # when it already existed
+    if [[ ! -f "${ROLLBACK_DIR}/user" ]]; then
+        if id -u "$TUNNEL_SSH_USER" &>/dev/null; then
+            userdel -r "$TUNNEL_SSH_USER" &>/dev/null
+            restored+=("user ${TUNNEL_SSH_USER} (removed)")
+        fi
+    elif [[ -s "${ROLLBACK_DIR}/user.hash" ]]; then
+        local hash
+        hash=$(cat "${ROLLBACK_DIR}/user.hash")
+        if [[ "$(getent shadow "$TUNNEL_SSH_USER" 2>/dev/null | cut -d: -f2)" != "$hash" ]]; then
+            usermod -p "$hash" "$TUNNEL_SSH_USER" &>/dev/null
+            restored+=("password of ${TUNNEL_SSH_USER}")
+        fi
+    fi
+
+    # Firewall rules this run opened - only those
+    if [[ -s "${ROLLBACK_DIR}/ufw" ]] && command -v ufw &>/dev/null; then
+        local rule
+        while read -r rule; do
+            ufw --force delete allow "$rule" &>/dev/null
+            restored+=("ufw ${rule} (closed)")
+        done < "${ROLLBACK_DIR}/ufw"
+    fi
+
+    systemctl daemon-reload &>/dev/null
+    [[ "$resolved_changed" == "true" ]] && systemctl restart systemd-resolved &>/dev/null
+    [[ "$sshd_changed" == "true" ]] && sshd -t &>/dev/null && reload_sshd
+
+    # Units come back in the state they were found in
+    for unit in "${XCP_UNITS[@]}"; do
+        systemctl cat "$unit" &>/dev/null || continue
+        if grep -qx "$unit" "${ROLLBACK_DIR}/enabled"; then
+            systemctl enable --quiet "$unit" &>/dev/null
+        else
+            systemctl disable --quiet "$unit" &>/dev/null
+        fi
+        grep -qx "$unit" "${ROLLBACK_DIR}/active" && systemctl start "$unit" &>/dev/null
+    done
+
+    if [[ ${#restored[@]} -eq 0 ]]; then
+        log_info "Nothing to undo - the server is as setup found it"
+    else
+        log_info "Restored: ${restored[*]}"
+    fi
+    if [[ -s "${ROLLBACK_DIR}/active" ]]; then
+        log_info "Running again: $(paste -sd' ' "${ROLLBACK_DIR}/active")"
+    fi
+    log_info "Kept: Xray binary, packages and network tuning - run setup again when ready"
+
+    rm -rf "$ROLLBACK_DIR"
+    ROLLBACK_DIR=""
+    exit "$rc"
+}
+
 # --- Setup ---
+# The helpers below share the caller's locals through bash's dynamic scoping:
+# each setup_* role declares USE_VLESS, USE_SS, the ports, REALITY and the
+# initial account, and these fill them in.
+
+# The ports preflight_ports checks for a role. 53 is left to free_dns_port.
+setup_preflight() {
+    local ports=("$WEB_PORT" ${VLESS_PORT:+"$VLESS_PORT"} ${SS_PORT:+"$SS_PORT"} "$LOCAL_SOCKS_PORT" "$API_PORT" "$TUNNEL_PORT")
+    [[ "$DNS_PORT" == "$DNS_UPSTREAM_PORT" ]] || ports+=("$DNS_PORT")
+    preflight_ports "${ports[@]}"
+}
+
+# The public ports a server opens: IP echo, plus each enabled client protocol.
+# Shadowsocks is the only one carrying UDP.
+client_firewall_ports() {
+    local web="$1" vless="$2" ss="$3"
+    echo "$web" ${vless:+"$vless"} ${ss:+"$ss" "${ss}/udp"}
+}
+
+# Protocols, ports, resolver and - when VLESS is on - the REALITY keys
+setup_client_settings() {
+    prompt_protocols
+    prompt_setup_ports
+    prompt_dns "DNS resolver" "$DEFAULT_DNS" DNS_SERVER
+
+    setup_preflight
+
+    [[ "$USE_VLESS" == "true" ]] || return 0
+
+    log_step "REALITY"
+
+    prompt_reality_dest REALITY_DEST
+    REALITY=$(reality_settings "$REALITY_DEST" "$VLESS_PORT")
+    log_success "REALITY keys generated, borrowing ${REALITY_DEST}"
+}
+
+# The initial `default` account. One record serves every enabled protocol: the
+# password authenticates Shadowsocks and the uuid VLESS.
+setup_initial_account() {
+    local uuid
+    USER_PASS=$(generate_password 16)
+    uuid=$(generate_uuid)
+    USER_CLIENT=$(jq -nc --arg p "$USER_PASS" --arg m "$ENCRYPTION_METHOD" --arg id "$uuid" \
+        '[{email: "default", password: $p, method: $m, id: $id}]')
+}
+
+# The client-facing part of the setup summary, one line per enabled protocol
+setup_print_client() {
+    [[ -n "$VLESS_PORT" ]] && \
+        echo -e "  VLESS Port: ${YELLOW}$VLESS_PORT${NC} (REALITY, borrowing ${REALITY_DEST})"
+    [[ -n "$SS_PORT" ]] && \
+        echo -e "  SS Port:    ${YELLOW}$SS_PORT${NC}"
+    echo -e "  Username:   ${YELLOW}default${NC}"
+    [[ -n "$SS_PORT" ]] && \
+        echo -e "  Password:   ${YELLOW}$USER_PASS${NC}"
+    return 0
+}
+
+# Bring up the freshly written config: open the client ports (DNS, the
+# diagnostics SOCKS and the tunnel stay on loopback), install the IP echo and
+# start Xray. Once Xray runs on the new config, setup keeps its changes.
+setup_finish() {
+    validate_config
+    configure_firewall $(client_firewall_ports "$WEB_PORT" "$VLESS_PORT" "$SS_PORT")
+    web_install "$WEB_PORT"
+
+    systemctl restart xray
+    sleep 2
+    systemctl is-active xray &>/dev/null || log_error "Xray failed to start - check: journalctl -u xray"
+
+    setup_commit
+
+    [[ -n "$REALITY" ]] && { reality_report_chain "$REALITY_DEST" || true; }
+    return 0
+}
 
 # Setup GATEWAY server
 setup_gateway() {
@@ -1666,25 +2057,15 @@ setup_gateway() {
 
     check_root
     check_systemd
+    setup_begin
     check_dependencies
     install_xray
     tune_network
 
-    log_step "Configure Ports"
+    log_step "Protocols and Ports"
 
-    local SS_PORT DNS_SERVER VLESS_PORT
-    prompt_port "VLESS (REALITY) port" "$DEFAULT_VLESS_PORT" VLESS_PORT
-    prompt_port "Shadowsocks port" "$DEFAULT_SS_PORT" SS_PORT
-    prompt_dns "DNS resolver" "$DEFAULT_DNS" DNS_SERVER
-
-    preflight_ports "$WEB_PORT" "$VLESS_PORT" "$SS_PORT" "$LOCAL_SOCKS_PORT" "$API_PORT" "$TUNNEL_PORT"
-
-    log_step "REALITY"
-
-    local REALITY_DEST REALITY
-    prompt_reality_dest REALITY_DEST
-    REALITY=$(reality_settings "$REALITY_DEST" "$VLESS_PORT")
-    log_success "REALITY keys generated, borrowing ${REALITY_DEST}"
+    local USE_VLESS USE_SS SS_PORT DNS_SERVER VLESS_PORT WEB_PORT DNS_PORT REALITY_DEST REALITY=""
+    setup_client_settings
 
     log_step "SSH Access"
 
@@ -1695,25 +2076,12 @@ setup_gateway() {
     prompt_password "Tunnel SSH password" true TUNNEL_PASS 32
     gateway_ssh_user "$TUNNEL_PASS"
 
-    # Create initial client account. One account works across every protocol:
-    # the password authenticates Shadowsocks/HTTP/SOCKS5, the uuid VLESS.
-    local USER_PASS=$(generate_password 16)
-    local USER_UUID=$("$XRAY_BIN" uuid)
-    local USER_CLIENT="[{\"email\":\"default\",\"password\":\"${USER_PASS}\",\"method\":\"${ENCRYPTION_METHOD}\",\"id\":\"${USER_UUID}\"}]"
+    local USER_PASS USER_CLIENT
+    setup_initial_account
 
-    free_dns_port
-
-    gen_gateway_config "$SS_PORT" "$USER_CLIENT" "$DNS_SERVER" "$REALITY" > "$XRAY_CONFIG"
-    validate_config
-    # DNS, the diagnostics SOCKS and the tunnel landing stay on loopback
-    configure_firewall "$WEB_PORT" "$VLESS_PORT" "$SS_PORT" "${SS_PORT}/udp"
-    web_install
-
-    systemctl restart xray
-    sleep 2
-    systemctl is-active xray &>/dev/null || log_error "Xray failed to start"
-
-    reality_report_chain "$REALITY_DEST" || true
+    free_dns_port "$DNS_PORT"
+    gen_gateway_config "$SS_PORT" "$USER_CLIENT" "$DNS_SERVER" "$REALITY" "$DNS_PORT" "$WEB_PORT" > "$XRAY_CONFIG"
+    setup_finish
 
     local IP=$(get_public_ip)
     local SSH_PORT=$(get_ssh_port)
@@ -1725,13 +2093,12 @@ setup_gateway() {
     echo -e "  SSH User:   ${YELLOW}$TUNNEL_SSH_USER${NC}"
     echo -e "  SSH Pass:   ${YELLOW}$TUNNEL_PASS${NC}"
     echo -e "\n${BOLD}Direct client access:${NC}"
-    echo -e "  VLESS Port: ${YELLOW}$VLESS_PORT${NC} (REALITY, borrowing ${REALITY_DEST})"
-    echo -e "  SS Port:    ${YELLOW}$SS_PORT${NC}"
-    echo -e "  Username:   ${YELLOW}default${NC}"
-    echo -e "  Password:   ${YELLOW}$USER_PASS${NC}"
+    setup_print_client
     echo -e "\n${BOLD}Loopback only (127.0.0.1):${NC}"
     echo -e "  SOCKS Port: ${YELLOW}$LOCAL_SOCKS_PORT${NC} (diagnostics)"
-    echo -e "  DNS Port:   ${YELLOW}$DEFAULT_DNS_PORT${NC} (${DNS_SERVER})"
+    echo -e "  DNS Port:   ${YELLOW}$DNS_PORT${NC} (${DNS_SERVER})"
+    echo -e "\n${BOLD}Public:${NC}"
+    echo -e "  IP echo:    ${YELLOW}$WEB_PORT${NC}"
     echo -e "\nRun '${SCRIPT_NAME} user ls' for the share URIs and QR codes.\n"
 }
 
@@ -1741,6 +2108,7 @@ setup_edge() {
 
     check_root
     check_systemd
+    setup_begin
     check_dependencies
     install_xray
     tune_network
@@ -1754,43 +2122,20 @@ setup_edge() {
     GW_USER="${GW_USER:-$TUNNEL_SSH_USER}"
     prompt_password "Gateway SSH password" false GW_PASS
 
-    log_step "Edge Settings"
+    log_step "Protocols and Ports"
 
-    local SS_PORT DNS_SERVER VLESS_PORT
-    prompt_port "VLESS (REALITY) port" "$DEFAULT_VLESS_PORT" VLESS_PORT
-    prompt_port "Shadowsocks port" "$DEFAULT_SS_PORT" SS_PORT
-    prompt_dns "DNS resolver" "$DEFAULT_DNS" DNS_SERVER
-
-    preflight_ports "$WEB_PORT" "$VLESS_PORT" "$SS_PORT" "$LOCAL_SOCKS_PORT" "$API_PORT" "$TUNNEL_PORT"
-
-    log_step "REALITY"
-
-    local REALITY_DEST REALITY
-    prompt_reality_dest REALITY_DEST
-    REALITY=$(reality_settings "$REALITY_DEST" "$VLESS_PORT")
-    log_success "REALITY keys generated, borrowing ${REALITY_DEST}"
+    local USE_VLESS USE_SS SS_PORT DNS_SERVER VLESS_PORT WEB_PORT DNS_PORT REALITY_DEST REALITY=""
+    setup_client_settings
 
     tunnel_setup "$GW_HOST" "$GW_PORT" "$GW_USER" "$GW_PASS"
 
-    # Create initial client account. One account works across every protocol:
-    # the password authenticates Shadowsocks/HTTP/SOCKS5, the uuid VLESS.
-    local USER_PASS=$(generate_password 16)
-    local USER_UUID=$("$XRAY_BIN" uuid)
-    local USER_CLIENT="[{\"email\":\"default\",\"password\":\"${USER_PASS}\",\"method\":\"${ENCRYPTION_METHOD}\",\"id\":\"${USER_UUID}\"}]"
+    local USER_PASS USER_CLIENT
+    setup_initial_account
 
-    free_dns_port
-
-    gen_edge_config "$SS_PORT" "$USER_CLIENT" "$GW_HOST" "$GW_PORT" "$GW_USER" "$DNS_SERVER" "$REALITY" > "$XRAY_CONFIG"
-    validate_config
-    # DNS and the diagnostics SOCKS stay on loopback
-    configure_firewall "$WEB_PORT" "$VLESS_PORT" "$SS_PORT" "${SS_PORT}/udp"
-    web_install
-
-    systemctl restart xray
-    sleep 2
-    systemctl is-active xray &>/dev/null || log_error "Xray failed to start"
-
-    reality_report_chain "$REALITY_DEST" || true
+    free_dns_port "$DNS_PORT"
+    gen_edge_config "$SS_PORT" "$USER_CLIENT" "$GW_HOST" "$GW_PORT" "$GW_USER" "$DNS_SERVER" "$REALITY" \
+        "$DNS_PORT" "$WEB_PORT" > "$XRAY_CONFIG"
+    setup_finish
 
     local IP=$(get_public_ip)
 
@@ -1798,11 +2143,9 @@ setup_edge() {
     echo -e "\n${BOLD}Chain:${NC} Client -> $IP -> ssh://$GW_HOST:$GW_PORT -> Internet"
     echo -e "\n${BOLD}Connection Details:${NC}"
     echo -e "  IP:         ${YELLOW}$IP${NC}"
-    echo -e "  VLESS Port: ${YELLOW}$VLESS_PORT${NC} (REALITY, borrowing ${REALITY_DEST})"
-    echo -e "  SS Port:    ${YELLOW}$SS_PORT${NC}"
-    echo -e "  Username:   ${YELLOW}default${NC}"
-    echo -e "  Password:   ${YELLOW}$USER_PASS${NC}"
-    echo -e "\n  DNS:        ${YELLOW}${DNS_SERVER}${NC} (loopback ${DEFAULT_DNS_PORT})"
+    setup_print_client
+    echo -e "  DNS:        ${YELLOW}${DNS_SERVER}${NC} (loopback ${DNS_PORT})"
+    echo -e "  IP echo:    ${YELLOW}${WEB_PORT}${NC}"
     echo -e "\nRun '${SCRIPT_NAME} user ls' for the share URIs and QR codes.\n"
 }
 
@@ -1822,15 +2165,17 @@ user_ls() {
     require_accounts
 
     local IP=$(get_public_ip)
-    local SS_PORT=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local SS_PORT=$(cfg_ss_port)
     local REALITY=$(jq -c '.xcp.reality // null' "$XRAY_CONFIG")
-    local clients=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .settings.clients[] | "\(.email)|\(.password)|\(.id // "")"' "$XRAY_CONFIG" 2>/dev/null)
+    local clients=$(jq -r --arg t "$(accounts_inbound)" \
+        '.inbounds[] | select(.tag == $t) | .settings.clients[] | "\(.email)|\(.password // "")|\(.id // "")"' \
+        "$XRAY_CONFIG" 2>/dev/null)
 
     echo -e "\n${BOLD}Server:${NC} $IP"
     if [[ "$REALITY" != "null" ]]; then
         echo -e "${BOLD}VLESS:${NC} $(echo "$REALITY" | jq -r '.port') (REALITY → $(echo "$REALITY" | jq -r '.dest'))"
     fi
-    echo -e "${BOLD}Shadowsocks:${NC} ${SS_PORT}"
+    [[ -n "$SS_PORT" ]] && echo -e "${BOLD}Shadowsocks:${NC} ${SS_PORT}"
     echo -e "\n${BOLD}Accounts:${NC}\n"
 
     if [[ -z "$clients" ]]; then
@@ -1838,10 +2183,12 @@ user_ls() {
     else
         local i=1
         while IFS='|' read -r email pass id; do
-            local uri=$(gen_ss_uri "$ENCRYPTION_METHOD" "$pass" "$IP" "$SS_PORT" "$email")
             echo -e "${CYAN}$i) $email${NC}"
-            echo -e "   Password: ${YELLOW}$pass${NC}"
-            echo "   SS URI: $uri"
+
+            if [[ -n "$SS_PORT" ]]; then
+                echo -e "   Password: ${YELLOW}$pass${NC}"
+                echo "   SS URI: $(gen_ss_uri "$ENCRYPTION_METHOD" "$pass" "$IP" "$SS_PORT" "$email")"
+            fi
 
             local vless_uri=$(gen_vless_uri "$id" "$IP" "$REALITY" "$email")
             [[ -n "$vless_uri" ]] && echo "   VLESS URI: $vless_uri"
@@ -1852,27 +2199,36 @@ user_ls() {
     fi
 }
 
+# True when an account with this name exists
+account_exists() {
+    jq -e --arg t "$(accounts_inbound)" --arg e "$1" \
+        '.inbounds[] | select(.tag == $t) | .settings.clients[] | select(.email == $e)' \
+        "$XRAY_CONFIG" &>/dev/null
+}
+
 # Add new user
 user_add() {
     check_root
     require_accounts
 
-    local EMAIL PASS
+    local EMAIL PASS=""
     read -rp "Username: " EMAIL
     [[ -z "$EMAIL" ]] && log_error "Username required"
-    jq -e --arg e "$EMAIL" '.inbounds[] | select(.tag == "ss-in") | .settings.clients[] | select(.email == $e)' "$XRAY_CONFIG" &>/dev/null && log_error "Account exists"
+    account_exists "$EMAIL" && log_error "Account exists"
 
-    prompt_password "Password" "true" PASS
-
-    local SS_PORT=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local SS_PORT=$(cfg_ss_port)
     local REALITY=$(jq -c '.xcp.reality // null' "$XRAY_CONFIG")
     local UUID=$(generate_uuid)
 
+    # VLESS authenticates with the uuid alone, so only Shadowsocks needs a password
+    [[ -n "$SS_PORT" ]] && prompt_password "Password" "true" PASS
+
     [[ "$UUID" =~ ^[0-9a-fA-F-]{36}$ ]] || log_error "Could not generate a client uuid"
 
-    # One account, both protocols: the password authenticates Shadowsocks and
-    # the uuid authenticates VLESS. The uuid is stored on the ss-in client so a
-    # single record stays the source of truth.
+    # One account, every enabled protocol: the password authenticates
+    # Shadowsocks and the uuid authenticates VLESS. With Shadowsocks on, the
+    # uuid is stored on the ss-in client too, so a single record stays the
+    # source of truth.
     jq --arg e "$EMAIL" --arg p "$PASS" --arg m "$ENCRYPTION_METHOD" \
         --arg id "$UUID" --arg f "$REALITY_FLOW" \
         '.inbounds |= map(
@@ -1886,27 +2242,32 @@ user_add() {
     sleep 1
 
     local IP=$(get_public_ip)
-    local URI=$(gen_ss_uri "$ENCRYPTION_METHOD" "$PASS" "$IP" "$SS_PORT" "$EMAIL")
+    local URI=""
+    [[ -n "$SS_PORT" ]] && URI=$(gen_ss_uri "$ENCRYPTION_METHOD" "$PASS" "$IP" "$SS_PORT" "$EMAIL")
     local VLESS_URI=$(gen_vless_uri "$UUID" "$IP" "$REALITY" "$EMAIL")
 
     echo -e "\n${GREEN}Account '$EMAIL' Added${NC}"
     echo -e "  IP:         ${YELLOW}$IP${NC}"
     [[ -n "$VLESS_URI" ]] && \
         echo -e "  VLESS Port: ${YELLOW}$(echo "$REALITY" | jq -r '.port')${NC}"
-    echo -e "  SS Port:    ${YELLOW}$SS_PORT${NC}"
+    [[ -n "$URI" ]] && \
+        echo -e "  SS Port:    ${YELLOW}$SS_PORT${NC}"
     echo -e "  Username:   ${YELLOW}$EMAIL${NC}"
-    echo -e "  Password:   ${YELLOW}$PASS${NC}\n"
+    [[ -n "$URI" ]] && \
+        echo -e "  Password:   ${YELLOW}$PASS${NC}"
+    echo
 
     # VLESS carries UDP and resists probing, so it leads and gets the QR code
     if [[ -n "$VLESS_URI" ]]; then
         command -v qrencode &>/dev/null && qrencode -t ANSIUTF8 "$VLESS_URI"
         echo "VLESS URI: $VLESS_URI"
-        echo
+        [[ -n "$URI" ]] && echo
     else
         command -v qrencode &>/dev/null && qrencode -t ANSIUTF8 "$URI"
     fi
 
-    echo "SS URI: $URI"
+    [[ -n "$URI" ]] && echo "SS URI: $URI"
+    return 0
 }
 
 # Remove user
@@ -1917,8 +2278,7 @@ user_rm() {
     local EMAIL
     read -rp "Username to remove: " EMAIL
     [[ -z "$EMAIL" ]] && log_error "Username required"
-    jq -e --arg e "$EMAIL" '.inbounds[] | select(.tag == "ss-in") | .settings.clients[] | select(.email == $e)' "$XRAY_CONFIG" &>/dev/null || log_error "Account not found"
-
+    account_exists "$EMAIL" || log_error "Account not found"
 
     jq --arg e "$EMAIL" \
         '.inbounds |= map(
@@ -1978,7 +2338,7 @@ config_ls() {
 
     local type=$(jq -r '.xcp.type // "unknown"' "$XRAY_CONFIG")
     local version=$(jq -r '.xcp.version // "unknown"' "$XRAY_CONFIG")
-    local ss_port=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    local ss_port=$(cfg_ss_port)
     local dns=$(jq -r ".xcp.dns // \"$DEFAULT_DNS\"" "$XRAY_CONFIG")
     local loglevel=$(jq -r '.log.loglevel // "warning"' "$XRAY_CONFIG")
     local reality=$(jq -c '.xcp.reality // null' "$XRAY_CONFIG")
@@ -1990,9 +2350,10 @@ config_ls() {
         echo -e "  VLESS Port: ${YELLOW}$(echo "$reality" | jq -r '.port')${NC}"
         echo -e "  REALITY:    ${YELLOW}$(echo "$reality" | jq -r '.dest')${NC}"
     fi
-    echo -e "  SS Port:    ${YELLOW}$ss_port${NC}"
+    [[ -n "$ss_port" ]] && echo -e "  SS Port:    ${YELLOW}$ss_port${NC}"
+    echo -e "  Echo Port:${YELLOW}$(cfg_web_port)${NC}"
     echo -e "  SOCKS Port: ${YELLOW}$LOCAL_SOCKS_PORT${NC} ${CYAN}(loopback)${NC}"
-    echo -e "  DNS Port:   ${YELLOW}$DEFAULT_DNS_PORT${NC} ${CYAN}(loopback)${NC}"
+    echo -e "  DNS Port:   ${YELLOW}$(cfg_dns_port)${NC}"
     echo -e "  DNS Server: ${YELLOW}$dns${NC}"
     echo -e "  Log level:  ${YELLOW}$loglevel${NC}"
 
@@ -2042,41 +2403,84 @@ config_loglevel() {
     log_success "Log level set to '$LEVEL'"
 }
 
-# Change listen port
+# Change listen ports: VLESS, Shadowsocks, IP echo and DNS
 config_port() {
     check_root
     require_config
 
-    local ss_current=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
-    local vless_current=$(jq -r '[.inbounds[] | select(.tag == "vless-in") | .port][0] // ""' "$XRAY_CONFIG")
+    # Only the enabled protocols are asked about - a disabled one stays empty
+    local ss_current=$(cfg_ss_port)
+    local vless_current=$(cfg_vless_port)
+    local web_current=$(cfg_web_port)
+    local dns_current=$(cfg_dns_port)
 
     echo -e "\n${BOLD}Listen Ports${NC}\n"
-    [[ -n "$vless_current" ]] && echo -e "Current: VLESS:${YELLOW}$vless_current${NC} | SS:${YELLOW}$ss_current${NC}\n"
-    [[ -z "$vless_current" ]] && echo -e "Current: SS:${YELLOW}$ss_current${NC}\n"
+    echo -e "Current: ${vless_current:+VLESS:${YELLOW}$vless_current${NC} | }${ss_current:+SS:${YELLOW}$ss_current${NC} | }Echo:${YELLOW}$web_current${NC} | DNS:${YELLOW}$dns_current${NC}\n"
 
-    local SS_PORT VLESS_PORT="$vless_current"
+    local SS_PORT="$ss_current" VLESS_PORT="$vless_current" WEB_PORT DNS_PORT
     [[ -n "$vless_current" ]] && prompt_port "VLESS (REALITY) port" "$vless_current" VLESS_PORT
-    prompt_port "Shadowsocks port" "$ss_current" SS_PORT
+    [[ -n "$ss_current" ]] && prompt_port "Shadowsocks port" "$ss_current" SS_PORT
+    prompt_port "IP echo port" "$web_current" WEB_PORT
+    prompt_port "DNS port" "$dns_current" DNS_PORT
 
-    if [[ "$SS_PORT" == "$ss_current" && "$VLESS_PORT" == "$vless_current" ]]; then
+    if [[ "$SS_PORT" == "$ss_current" && "$VLESS_PORT" == "$vless_current" && \
+          "$WEB_PORT" == "$web_current" && "$DNS_PORT" == "$dns_current" ]]; then
         log_info "Ports unchanged"
         return
     fi
 
+    ports_distinct ${VLESS_PORT:+"$VLESS_PORT"} ${SS_PORT:+"$SS_PORT"} "$WEB_PORT" "$DNS_PORT" \
+        "$API_PORT" "$TUNNEL_PORT" "$LOCAL_SOCKS_PORT" "$REALITY_PROBE_PORT" || \
+        log_error "Each port must be different, and not one of ${API_PORT}, ${TUNNEL_PORT}, ${LOCAL_SOCKS_PORT}, ${REALITY_PROBE_PORT}"
+
+    # This server already holds its current ports, so only the moved ones can
+    # clash with something else
+    local busy=() pair
+    for pair in "$VLESS_PORT:$vless_current" "$SS_PORT:$ss_current" \
+                "$WEB_PORT:$web_current" "$DNS_PORT:$dns_current"; do
+        [[ -z "${pair%%:*}" || "${pair%%:*}" == "${pair#*:}" ]] && continue
+        # The resolver stub shares 53 on another address - free_dns_port handles it
+        [[ "${pair%%:*}" == "$DNS_PORT" && "$DNS_PORT" == "$DNS_UPSTREAM_PORT" ]] && continue
+        port_taken "${pair%%:*}" && busy+=("${pair%%:*}")
+    done
+    [[ ${#busy[@]} -eq 0 ]] || log_error "Ports already in use: ${busy[*]}"
+
     # The share URIs are rebuilt from xcp.reality, so its port moves too
-    jq --argjson ss "$SS_PORT" --arg vless "$VLESS_PORT" \
+    jq --arg ss "$SS_PORT" --arg vless "$VLESS_PORT" \
+        --argjson web "$WEB_PORT" --argjson dns "$DNS_PORT" \
         '(if $vless == "" then . else
             (.inbounds |= map(if .tag == "vless-in" then .port = ($vless | tonumber) else . end))
             | (if .xcp.reality then .xcp.reality.port = ($vless | tonumber) else . end)
           end)
-         | .inbounds |= map(if .tag == "ss-in" then .port = $ss else . end)' \
+         | .xcp.web_port = $web
+         | .inbounds |= map(
+             if .tag == "ss-in" and $ss != "" then .port = ($ss | tonumber)
+             elif .tag == "dns-in" then .port = $dns
+             else . end)' \
         "$XRAY_CONFIG" | config_write
 
     # Open the new ports before loading the config that listens on them
-    configure_firewall ${VLESS_PORT:+"$VLESS_PORT"} "$SS_PORT" "${SS_PORT}/udp"
+    configure_firewall $(client_firewall_ports "$WEB_PORT" "$VLESS_PORT" "$SS_PORT")
+
+    # Allowed DNS clients follow the resolver to its new port
+    if [[ "$DNS_PORT" != "$dns_current" ]]; then
+        free_dns_port "$DNS_PORT"
+
+        local source
+        while read -r source; do
+            [[ -n "$source" ]] || continue
+            dns_firewall_rule delete "$source" "$dns_current"
+            dns_firewall_rule add "$source" "$DNS_PORT"
+        done < <(jq -r '.xcp.dns_allow // [] | .[]' "$XRAY_CONFIG")
+    fi
+
     apply_config
 
-    log_success "Ports updated: ${VLESS_PORT:+VLESS:$VLESS_PORT }SS:$SS_PORT"
+    if [[ "$WEB_PORT" != "$web_current" ]]; then
+        web_install "$WEB_PORT"
+    fi
+
+    log_success "Ports updated: ${VLESS_PORT:+VLESS:$VLESS_PORT }${SS_PORT:+SS:$SS_PORT }Echo:$WEB_PORT DNS:$DNS_PORT"
 }
 
 # Change the DNS resolver this server answers with
@@ -2225,18 +2629,19 @@ dns_apply_access() {
         "$config" | config_write "$config"
 }
 
-# Add or remove the port-53 rules for one source
+# Add or remove the DNS port rules for one source. The port defaults to the one
+# dns-in listens on now; `config port` passes the old and new ones explicitly.
 dns_firewall_rule() {
-    local action="$1" source="$2"
+    local action="$1" source="$2" port="${3:-$(cfg_dns_port)}"
 
     firewall_active || return 0
 
     if [[ "$action" == "add" ]]; then
-        ufw allow from "$source" to any port "$DEFAULT_DNS_PORT" proto udp &>/dev/null || true
-        ufw allow from "$source" to any port "$DEFAULT_DNS_PORT" proto tcp &>/dev/null || true
+        ufw allow from "$source" to any port "$port" proto udp &>/dev/null || true
+        ufw allow from "$source" to any port "$port" proto tcp &>/dev/null || true
     else
-        ufw --force delete allow from "$source" to any port "$DEFAULT_DNS_PORT" proto udp &>/dev/null || true
-        ufw --force delete allow from "$source" to any port "$DEFAULT_DNS_PORT" proto tcp &>/dev/null || true
+        ufw --force delete allow from "$source" to any port "$port" proto udp &>/dev/null || true
+        ufw --force delete allow from "$source" to any port "$port" proto tcp &>/dev/null || true
     fi
 }
 
@@ -2252,9 +2657,9 @@ dns_ls() {
     echo -e "  Resolver: ${YELLOW}${resolver}${NC}  (change with '${SCRIPT_NAME} config set')"
 
     if [[ "$listen" == "127.0.0.1" ]]; then
-        echo -e "  Reachable: ${YELLOW}loopback only${NC}"
+        echo -e "  Reachable: ${YELLOW}127.0.0.1:$(cfg_dns_port)${NC}, loopback only"
     else
-        echo -e "  Reachable: ${YELLOW}${listen}:${DEFAULT_DNS_PORT}${NC}, allowed sources only"
+        echo -e "  Reachable: ${YELLOW}${listen}:$(cfg_dns_port)${NC}, allowed sources only"
     fi
 
     # `ufw status` needs root, so without it the answer would be a guess
@@ -2577,8 +2982,10 @@ link_set() {
     tunnel_setup "$GW_HOST" "$GW_PORT" "$GW_USER" "$GW_PASS"
 
     # Rebuild the config, carrying over users, ports, dns, log settings and custom rules
-    local clients=$(jq -c '.inbounds[] | select(.tag == "ss-in") | .settings.clients' "$XRAY_CONFIG")
-    local ss_port=$(jq -r '.inbounds[] | select(.tag == "ss-in") | .port' "$XRAY_CONFIG")
+    # The enabled protocols carry over too: an absent ss-in stays absent, and so
+    # does VLESS when there is no xcp.reality
+    local clients=$(jq -c --arg t "$(accounts_inbound)" '[.inbounds[] | select(.tag == $t) | .settings.clients][0] // []' "$XRAY_CONFIG")
+    local ss_port=$(cfg_ss_port)
     local dns=$(jq -r ".xcp.dns // \"$DEFAULT_DNS\"" "$XRAY_CONFIG")
     local custom=$(jq -c '[.routing.rules[] | select(.xcp_custom == true)]' "$XRAY_CONFIG")
     local logcfg=$(jq -c '.log' "$XRAY_CONFIG")
@@ -2595,8 +3002,11 @@ link_set() {
               | .streamSettings.realitySettings.privateKey][0] // "")}
           end' "$XRAY_CONFIG")
 
+    local dns_port=$(cfg_dns_port) web_port=$(cfg_web_port)
+
     local TMP=$(mktemp)
-    gen_edge_config "$ss_port" "$clients" "$GW_HOST" "$GW_PORT" "$GW_USER" "$dns" "$reality" > "$TMP"
+    gen_edge_config "$ss_port" "$clients" "$GW_HOST" "$GW_PORT" "$GW_USER" "$dns" "$reality" \
+        "$dns_port" "$web_port" > "$TMP"
 
     jq --argjson custom "$custom" --argjson log "$logcfg" --argjson allow "$dns_allow" \
         "$JQ_INSERT_RULES .log = \$log | .xcp.dns_allow = \$allow | insert_rules(\$custom)" \
@@ -2726,7 +3136,7 @@ show_status() {
     fi
 
     if [[ -f "$WEB_SOCKET" ]] && systemctl is-active xcp-web.socket &>/dev/null; then
-        echo -e "Echo:   ${GREEN}● Answering on port ${WEB_PORT}${NC}"
+        echo -e "Echo:   ${GREEN}● Answering on port $(cfg_web_port)${NC}"
     fi
 
     echo
@@ -2852,11 +3262,12 @@ test_proxy() {
         echo -e "\n${BOLD}Testing DNS...${NC}\n"
 
         local dns=$(jq -r ".xcp.dns // \"$DEFAULT_DNS\"" "$XRAY_CONFIG")
+        local dns_port=$(cfg_dns_port)
 
-        if dig +short +time=3 +tries=1 "@127.0.0.1" -p "$DEFAULT_DNS_PORT" example.com &>/dev/null; then
-            echo -e "${GREEN}OK${NC} - Resolver ${YELLOW}${dns}${NC} answering on port ${DEFAULT_DNS_PORT}"
+        if dig +short +time=3 +tries=1 "@127.0.0.1" -p "$dns_port" example.com &>/dev/null; then
+            echo -e "${GREEN}OK${NC} - Resolver ${YELLOW}${dns}${NC} answering on port ${dns_port}"
         else
-            echo -e "${RED}Failed${NC} - No answer on port ${DEFAULT_DNS_PORT}"
+            echo -e "${RED}Failed${NC} - No answer on port ${dns_port}"
         fi
     fi
 

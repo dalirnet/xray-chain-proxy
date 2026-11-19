@@ -59,6 +59,14 @@ xcp_call() {
     return $rc
 }
 
+# The prompts use namerefs (bash 4.3+). Servers run a modern bash; macOS ships
+# 3.2, so tests that drive a prompt are skipped there instead of failing.
+if bash -c 'x=0; f() { local -n r="$1"; r=1; }; f x; [[ $x == 1 ]]' &>/dev/null; then
+    readonly NAMEREF_OK=true
+else
+    readonly NAMEREF_OK=false
+fi
+
 # --- Tests ---
 
 test_json_operations() {
@@ -957,6 +965,297 @@ test_version_sync() {
 
 # --- Main ---
 
+test_custom_ports() {
+    test_section "Testing Custom Ports (IP echo, DNS)"
+
+    local TEST_DIR="/tmp/xcp-test-$$"
+    local EDGE="$TEST_DIR/edge.json"
+    local GW="$TEST_DIR/gateway.json"
+    local LOG="$TEST_DIR/ufw.log"
+    mkdir -p "$TEST_DIR"
+
+    local clients='[{"email":"a","password":"p","method":"aes-256-gcm"}]'
+
+    # Defaults: 80 for the echo, 53 for the resolver
+    xcp_call "gen_edge_config 8443 '$clients' 203.0.113.9 22 xcp" > "$EDGE"
+    test_assert "Default echo port is 80" "[[ \"\$(jq -r '.xcp.web_port' '$EDGE')\" == '80' ]]" || true
+    test_assert "Default DNS port is 53" "[[ \"\$(xcp_call \"cfg_dns_port '$EDGE'\")\" == '53' ]]" || true
+
+    # Custom ports land in the config
+    xcp_call "gen_edge_config 8443 '$clients' 203.0.113.9 22 xcp 1.1.1.1 '' 5353 8080" > "$EDGE"
+    xcp_call "gen_gateway_config 8443 '$clients' 1.1.1.1 '' 5353 8080" > "$GW"
+
+    test_assert "Edge config is valid JSON" "jq -e . '$EDGE' &>/dev/null" || true
+    test_assert "Gateway config is valid JSON" "jq -e . '$GW' &>/dev/null" || true
+    test_assert "Edge stores the echo port" "[[ \"\$(xcp_call \"cfg_web_port '$EDGE'\")\" == '8080' ]]" || true
+    test_assert "Gateway stores the echo port" "[[ \"\$(xcp_call \"cfg_web_port '$GW'\")\" == '8080' ]]" || true
+    test_assert "Edge dns-in listens on the custom port" "[[ \"\$(xcp_call \"cfg_dns_port '$EDGE'\")\" == '5353' ]]" || true
+    test_assert "Gateway dns-in listens on the custom port" "[[ \"\$(xcp_call \"cfg_dns_port '$GW'\")\" == '5353' ]]" || true
+
+    # The upstream resolver and client queries are still addressed to 53
+    test_assert "Resolver upstream stays on 53" \
+        "[[ \"\$(jq -r '.inbounds[] | select(.tag == \"dns-in\") | .settings.port' '$EDGE')\" == '53' ]]" || true
+    test_assert "Edge client DNS rule stays on 53" \
+        "[[ \"\$(jq -r '[.routing.rules[] | select(.outboundTag == \"dns-out\" and .network == \"udp\") | .port][0]' '$EDGE')\" == '53' ]]" || true
+
+    # Configs from before custom ports read as the defaults
+    echo '{"xcp":{"type":"edge"},"inbounds":[]}' > "$EDGE"
+    test_assert "Missing web_port reads as 80" "[[ \"\$(xcp_call \"cfg_web_port '$EDGE'\")\" == '80' ]]" || true
+    test_assert "Missing dns-in reads as 53" "[[ \"\$(xcp_call \"cfg_dns_port '$EDGE'\")\" == '53' ]]" || true
+    test_assert "Missing config reads as defaults" \
+        "[[ \"\$(xcp_call \"cfg_web_port /nonexistent\"):\$(xcp_call \"cfg_dns_port /nonexistent\")\" == '80:53' ]]" || true
+
+    # Duplicate detection
+    test_assert "Distinct ports pass" "xcp_call 'ports_distinct 80 443 8443 53'" || true
+    test_assert "Duplicate ports fail" "! xcp_call 'ports_distinct 80 443 8443 443'" || true
+
+    # The socket unit listens on the chosen port
+    local lib="$TEST_DIR/lib.sh"
+    sed '$d' "$SCRIPT_PATH" | sed \
+        -e "s#^readonly WEB_SOCKET=.*#readonly WEB_SOCKET=\"$TEST_DIR/web.socket\"#" \
+        -e "s#^readonly WEB_SERVICE=.*#readonly WEB_SERVICE=\"$TEST_DIR/web@.service\"#" > "$lib"
+    bash -c "source '$lib'; web_write_responder() { :; }; systemctl() { return 0; }
+        log_success() { :; }; web_install 8080" &>/dev/null || true
+    test_assert "Socket unit listens on the custom port" "grep -q '^ListenStream=8080$' '$TEST_DIR/web.socket'" || true
+
+    # Only port 53 shares with the systemd-resolved stub, so only it is freed
+    test_assert "Custom DNS port skips freeing the stub" \
+        "[[ -z \"\$(xcp_call 'systemctl() { echo touched; }; log_info() { echo touched; }; free_dns_port 5353')\" ]]" || true
+
+    # DNS firewall rules follow the port they are given
+    : > "$LOG"
+    xcp_call "firewall_active() { return 0; }
+        ufw() { echo \"ufw \$*\" >> '$LOG'; }
+        dns_firewall_rule add 1.2.3.4 5353" &>/dev/null || true
+    test_assert "DNS allow rule uses the custom port" \
+        "grep -q 'from 1.2.3.4 to any port 5353 proto udp' '$LOG' && grep -q 'from 1.2.3.4 to any port 5353 proto tcp' '$LOG'" || true
+
+    rm -rf "$TEST_DIR"
+}
+
+test_protocol_modes() {
+    test_section "Testing Protocol Modes (both, VLESS only, SS only)"
+
+    local TEST_DIR="/tmp/xcp-test-$$"
+    mkdir -p "$TEST_DIR"
+
+    local clients='[{"email":"default","password":"p","method":"aes-256-gcm","id":"11111111-2222-3333-4444-555555555555"}]'
+    local reality='{"port":443,"dest":"www.cloudflare.com","privateKey":"P","publicKey":"K","shortId":"ab"}'
+
+    local BOTH="$TEST_DIR/both.json" VLESS="$TEST_DIR/vless.json" SS="$TEST_DIR/ss.json"
+    local EVLESS="$TEST_DIR/edge-vless.json" ESS="$TEST_DIR/edge-ss.json"
+
+    xcp_call "gen_gateway_config 8443 '$clients' 1.1.1.1 '$reality'" > "$BOTH"
+    xcp_call "gen_gateway_config '' '$clients' 1.1.1.1 '$reality'" > "$VLESS"
+    xcp_call "gen_gateway_config 8443 '$clients' 1.1.1.1 ''" > "$SS"
+    xcp_call "gen_edge_config '' '$clients' 203.0.113.9 22 xcp 1.1.1.1 '$reality'" > "$EVLESS"
+    xcp_call "gen_edge_config 8443 '$clients' 203.0.113.9 22 xcp 1.1.1.1 ''" > "$ESS"
+
+    local tags='[.inbounds[] | select(.tag == "vless-in" or .tag == "ss-in") | .tag] | join(",")'
+
+    test_assert "Every mode generates valid JSON" \
+        "jq -e . '$BOTH' '$VLESS' '$SS' '$EVLESS' '$ESS' &>/dev/null" || true
+    test_assert "Both: VLESS and Shadowsocks inbounds" "[[ \"\$(jq -r '$tags' '$BOTH')\" == 'vless-in,ss-in' ]]" || true
+    test_assert "VLESS only: no Shadowsocks inbound" "[[ \"\$(jq -r '$tags' '$VLESS')\" == 'vless-in' ]]" || true
+    test_assert "SS only: no VLESS inbound" "[[ \"\$(jq -r '$tags' '$SS')\" == 'ss-in' ]]" || true
+    test_assert "Edge VLESS only: no Shadowsocks inbound" "[[ \"\$(jq -r '$tags' '$EVLESS')\" == 'vless-in' ]]" || true
+    test_assert "Edge SS only: no VLESS inbound" "[[ \"\$(jq -r '$tags' '$ESS')\" == 'ss-in' ]]" || true
+    test_assert "SS only stores no REALITY block" "[[ \"\$(jq -r '.xcp.reality' '$SS')\" == 'null' ]]" || true
+    test_assert "VLESS only keeps the account uuid" \
+        "[[ \"\$(jq -r '.inbounds[] | select(.tag == \"vless-in\") | .settings.clients[0].id' '$VLESS')\" == '11111111-2222-3333-4444-555555555555' ]]" || true
+
+    # Accounts live on Shadowsocks whenever it is on
+    test_assert "Both: accounts on ss-in" "[[ \"\$(xcp_call \"accounts_inbound '$BOTH'\")\" == 'ss-in' ]]" || true
+    test_assert "SS only: accounts on ss-in" "[[ \"\$(xcp_call \"accounts_inbound '$SS'\")\" == 'ss-in' ]]" || true
+    test_assert "VLESS only: accounts on vless-in" "[[ \"\$(xcp_call \"accounts_inbound '$VLESS'\")\" == 'vless-in' ]]" || true
+
+    test_assert "Port readers: VLESS only" \
+        "[[ \"\$(xcp_call \"cfg_vless_port '$VLESS'\"):\$(xcp_call \"cfg_ss_port '$VLESS'\")\" == '443:' ]]" || true
+    test_assert "Port readers: SS only" \
+        "[[ \"\$(xcp_call \"cfg_vless_port '$SS'\"):\$(xcp_call \"cfg_ss_port '$SS'\")\" == ':8443' ]]" || true
+
+    # The firewall opens exactly the enabled protocols, UDP for Shadowsocks only
+    test_assert "Firewall: both" "[[ \"\$(xcp_call 'client_firewall_ports 80 443 8443')\" == '80 443 8443 8443/udp' ]]" || true
+    test_assert "Firewall: VLESS only" "[[ \"\$(xcp_call 'client_firewall_ports 80 443 \"\"')\" == '80 443' ]]" || true
+    test_assert "Firewall: SS only" "[[ \"\$(xcp_call 'client_firewall_ports 80 \"\" 8443')\" == '80 8443 8443/udp' ]]" || true
+
+    # The setup prompt defaults to both protocols
+    local mode
+    mode=$(xcp_call 'prompt_protocols <<< "" >/dev/null; echo "$USE_VLESS:$USE_SS"')
+    test_assert "Protocol prompt defaults to both" "[[ '$mode' == 'true:true' ]]" || true
+    mode=$(xcp_call 'prompt_protocols <<< "2" >/dev/null; echo "$USE_VLESS:$USE_SS"')
+    test_assert "Option 2 is VLESS only" "[[ '$mode' == 'true:false' ]]" || true
+    mode=$(xcp_call 'prompt_protocols <<< "3" >/dev/null; echo "$USE_VLESS:$USE_SS"')
+    test_assert "Option 3 is SS only" "[[ '$mode' == 'false:true' ]]" || true
+
+    if [[ "$NAMEREF_OK" != "true" ]]; then
+        echo "  - skipped prompt and user tests: bash ${BASH_VERSION%%(*} has no namerefs"
+        rm -rf "$TEST_DIR"
+        return 0
+    fi
+
+    # Only enabled protocols get a port prompt
+    local asked
+    asked=$(xcp_call 'USE_VLESS=false USE_SS=true; printf "\\n\\n\\n\\n" | { prompt_setup_ports >/dev/null 2>&1; echo "${VLESS_PORT:-none}:$SS_PORT:$WEB_PORT:$DNS_PORT"; }' 2>/dev/null || true)
+    test_assert "SS only prompts no VLESS port, defaults 8443/80/53" "[[ '$asked' == 'none:8443:80:53' ]]" || true
+    asked=$(xcp_call 'USE_VLESS=true USE_SS=false; printf "\\n\\n\\n\\n" | { prompt_setup_ports >/dev/null 2>&1; echo "$VLESS_PORT:${SS_PORT:-none}"; }' 2>/dev/null || true)
+    test_assert "VLESS only prompts no SS port, defaults 443" "[[ '$asked' == '443:none' ]]" || true
+
+    # User management against a VLESS-only config: no password, uuid-only record
+    local lib="$TEST_DIR/lib.sh" CFG="$TEST_DIR/live.json"
+    cp "$VLESS" "$CFG"
+    sed '$d' "$SCRIPT_PATH" | sed "s#^readonly XRAY_CONFIG=.*#readonly XRAY_CONFIG=\"$CFG\"#" > "$lib"
+    local stubs="check_root() { :; }; apply_config() { :; }; get_public_ip() { echo 203.0.113.1; }; sleep() { :; }
+        generate_uuid() { echo aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee; }"
+
+    local out
+    out=$(bash -c "source '$lib'; $stubs; user_add <<< 'bob'" 2>&1 || true)
+    test_assert "VLESS only: user add stores a uuid-only client" \
+        "[[ \"\$(jq -r '.inbounds[] | select(.tag == \"vless-in\") | .settings.clients[] | select(.email == \"bob\") | (.id | length)' '$CFG')\" == '36' ]]" || true
+    test_assert "VLESS only: user add prints no SS URI" "! echo '$out' | grep -q '^SS URI'" || true
+    test_assert "VLESS only: user add prints a VLESS URI" "echo '$out' | grep -q 'VLESS URI: vless://'" || true
+
+    out=$(bash -c "source '$lib'; $stubs; user_ls" 2>&1 || true)
+    test_assert "VLESS only: user ls lists both accounts" \
+        "echo '$out' | grep -q 'default' && echo '$out' | grep -q 'bob'" || true
+
+    bash -c "source '$lib'; $stubs; user_rm <<< 'bob'" &>/dev/null || true
+    test_assert "VLESS only: user rm removes the client" \
+        "[[ \"\$(jq '[.inbounds[] | select(.tag == \"vless-in\") | .settings.clients[] | select(.email == \"bob\")] | length' '$CFG')\" == '0' ]]" || true
+
+    # SS only: the account still gets a uuid, so VLESS can draw on it later
+    cp "$SS" "$CFG"
+    out=$(bash -c "source '$lib'; $stubs; user_add <<< \$'carol\nsecret'" 2>&1 || true)
+    test_assert "SS only: user add stores the password" \
+        "[[ \"\$(jq -r '.inbounds[] | select(.tag == \"ss-in\") | .settings.clients[] | select(.email == \"carol\") | .password' '$CFG')\" == 'secret' ]]" || true
+    test_assert "SS only: user add prints no VLESS URI" "! echo '$out' | grep -q 'VLESS URI'" || true
+
+    rm -rf "$TEST_DIR"
+}
+
+test_setup_rollback() {
+    test_section "Testing Setup Rollback"
+
+    # BASHPID (bash 4+) tells the setup shell apart from its subshells
+    if [[ "$NAMEREF_OK" != "true" ]]; then
+        echo "  - skipped: bash ${BASH_VERSION%%(*} is too old for the setup shell"
+        return 0
+    fi
+
+    local T="/tmp/xcp-rb-$$"
+    rm -rf "$T"; mkdir -p "$T/systemd" "$T/xray" "$T/resolved" "$T/ssh"
+
+    # Every system path points into $T, so nothing outside it is ever touched
+    local lib="$T/lib.sh"
+    sed '$d' "$SCRIPT_PATH" | sed \
+        -e "s#/etc/systemd/system#$T/systemd#g" \
+        -e "s#/usr/local/xray#$T/xray#g" \
+        -e "s#/etc/systemd/resolved.conf.d#$T/resolved#g" \
+        -e "s#/etc/resolv.conf#$T/resolv.conf#g" \
+        -e "s#/etc/ssh/sshd_config#$T/ssh/sshd_config#g" > "$lib"
+
+    # systemd, ufw and the user tools only log what they are asked to do.
+    # $T/active and $T/users hold the state the stubs report.
+    local stubs="
+        systemctl() { echo \"systemctl \$*\" >> '$T/calls'
+            case \"\$1\" in
+                is-active) grep -qx \"\${@: -1}\" '$T/active' 2>/dev/null ;;
+                is-enabled) grep -qx \"\${@: -1}\" '$T/enabled' 2>/dev/null ;;
+                cat) [[ -f '$T/systemd/'\"\${@: -1}\" ]] ;;
+                *) return 0 ;;
+            esac; }
+        ufw() { echo \"ufw \$*\" >> '$T/calls'; }
+        firewall_active() { return 0; }
+        id() { grep -qx \"\${@: -1}\" '$T/users' 2>/dev/null; }
+        userdel() { echo \"userdel \$*\" >> '$T/calls'; }
+        getent() { echo 'xcp:OLDHASH:1:0:99999:7:::'; }
+        usermod() { echo \"usermod \$*\" >> '$T/calls'; }
+        sshd() { return 0; }
+        reload_sshd() { echo reload_sshd >> '$T/calls'; }"
+
+    run_setup() { bash -c "source '$lib'; $stubs; $1" &>/dev/null; echo $?; }
+    reset() { rm -rf "$T"/systemd/* "$T"/xray/* "$T"/resolved/* "$T/calls" "$T/active" "$T/enabled" "$T/users"
+        printf 'Port 22\n' > "$T/ssh/sshd_config"; ln -sfn stub-resolv.conf "$T/resolv.conf"; : > "$T/calls"; }
+
+    # 1) Fresh server, setup dies after writing files: everything it made goes
+    reset
+    local rc
+    rc=$(run_setup "setup_begin
+        echo '{}' > \"\$XRAY_CONFIG\"; write_xray_service
+        echo '[Socket]' > \"\$WEB_SOCKET\"; echo pass > \"\$TUNNEL_PASS_FILE\"
+        printf 'Port 22\nMatch User xcp\n' > /dev/null
+        echo '# xcp' >> '$T/ssh/sshd_config'
+        log_error 'boom'")
+    test_assert "Failed setup keeps its exit code" "[[ '$rc' == '1' ]]" || true
+    test_assert "Fresh: config removed" "[[ ! -e '$T/xray/config.json' ]]" || true
+    test_assert "Fresh: xray unit removed" "[[ ! -e '$T/systemd/xray.service' ]]" || true
+    test_assert "Fresh: echo socket removed" "[[ ! -e '$T/systemd/xcp-web.socket' ]]" || true
+    test_assert "Fresh: tunnel password removed" "[[ ! -e '$T/xray/tunnel_pass' ]]" || true
+    test_assert "Fresh: sshd_config restored" "[[ \"\$(cat '$T/ssh/sshd_config')\" == 'Port 22' ]]" || true
+    test_assert "Fresh: sshd reloaded after restore" "grep -q reload_sshd '$T/calls'" || true
+    test_assert "Fresh: nothing restarted" "! grep -q 'systemctl start' '$T/calls'" || true
+    test_assert "No snapshot left behind" "! ls -d /tmp/xcp-rollback.* 2>/dev/null | grep -q ." || true
+
+    # 2) Re-run over a working install: old config and running services return
+    reset
+    echo '{"old":true}' > "$T/xray/config.json"
+    echo '[Unit]' > "$T/systemd/xray.service"
+    echo '[Socket]' > "$T/systemd/xcp-web.socket"
+    printf 'xray.service\nxcp-web.socket\n' > "$T/active"
+    printf 'xray.service\nxcp-web.socket\n' > "$T/enabled"
+    rc=$(run_setup "setup_begin; preflight_ports
+        echo '{\"new\":true}' > \"\$XRAY_CONFIG\"
+        false")
+    test_assert "Re-run: set -e failure rolls back too" "[[ '$rc' == '1' ]]" || true
+    test_assert "Re-run: previous config restored" "[[ \"\$(cat '$T/xray/config.json')\" == '{\"old\":true}' ]]" || true
+    test_assert "Re-run: previous unit kept" "[[ -f '$T/systemd/xray.service' ]]" || true
+    test_assert "Re-run: xray started again" "grep -q 'systemctl start xray.service' '$T/calls'" || true
+    test_assert "Re-run: echo socket started again" "grep -q 'systemctl start xcp-web.socket' '$T/calls'" || true
+    test_assert "Re-run: stopped tunnel stays stopped" "! grep -q 'systemctl start xray-tunnel.service' '$T/calls'" || true
+
+    # 3) Preflight stops every unit this script owns, the echo socket included
+    test_assert "Preflight stops the echo socket" "grep -q 'systemctl stop xcp-web.socket' '$T/calls'" || true
+    test_assert "Preflight stops the health timer" "grep -q 'systemctl stop xray-tunnel-health.timer' '$T/calls'" || true
+
+    # 4) A finished setup keeps everything
+    reset
+    rc=$(run_setup "setup_begin; echo '{\"kept\":true}' > \"\$XRAY_CONFIG\"; setup_commit; exit 0")
+    test_assert "Committed setup keeps its config" "[[ \"\$(cat '$T/xray/config.json' 2>/dev/null)\" == '{\"kept\":true}' ]]" || true
+    test_assert "Committed setup exits cleanly" "[[ '$rc' == '0' ]]" || true
+
+    # 5) Ctrl+C rolls back, exiting 130
+    reset
+    rc=$(run_setup "setup_begin; echo '{}' > \"\$XRAY_CONFIG\"; kill -INT \$\$; sleep 5")
+    test_assert "Ctrl+C rolls back" "[[ ! -e '$T/xray/config.json' ]]" || true
+    test_assert "Ctrl+C exits 130" "[[ '$rc' == '130' ]]" || true
+
+    # 6) Firewall: only rules this run opened are closed again
+    reset
+    rc=$(run_setup "ufw() { echo \"ufw \$*\" >> '$T/calls'; [[ \"\$1\" == status ]] && echo '8443/tcp ALLOW Anywhere'; return 0; }
+        setup_begin; configure_firewall 8443 4443; exit 1")
+    test_assert "Firewall: new rule closed" "grep -q 'ufw --force delete allow 4443/tcp' '$T/calls'" || true
+    test_assert "Firewall: existing rule kept" "! grep -q 'delete allow 8443/tcp' '$T/calls'" || true
+
+    # 7) Tunnel user: removed when this run created it, password restored otherwise
+    reset
+    rc=$(run_setup "setup_begin; echo xcp >> '$T/users'; exit 1")
+    test_assert "New tunnel user removed" "grep -q 'userdel -r xcp' '$T/calls'" || true
+
+    reset
+    echo xcp > "$T/users"
+    rc=$(run_setup "setup_begin; getent() { echo 'xcp:NEWHASH:1:0:99999:7:::'; }; exit 1")
+    test_assert "Existing tunnel user kept" "! grep -q userdel '$T/calls'" || true
+    test_assert "Existing tunnel user's password restored" "grep -q 'usermod -p OLDHASH xcp' '$T/calls'" || true
+
+    # 8) The resolver stub link free_dns_port repoints comes back
+    reset
+    rc=$(run_setup "setup_begin; ln -sfn real-resolv.conf '$T/resolv.conf'; echo x > \"\$RESOLVED_DROPIN\"; exit 1")
+    test_assert "resolv.conf link restored" "[[ \"\$(readlink '$T/resolv.conf')\" == 'stub-resolv.conf' ]]" || true
+    test_assert "resolved drop-in removed" "[[ ! -e '$T/resolved/xcp.conf' ]]" || true
+
+    rm -rf "$T"
+}
+
 show_results() {
     echo -e "\n${BOLD}=== Test Results ===${NC}"
     echo -e "Total:  ${CYAN}$TESTS_RUN${NC}"
@@ -992,6 +1291,9 @@ main() {
     test_dns_service
     test_dns_access
     test_firewall
+    test_custom_ports
+    test_protocol_modes
+    test_setup_rollback
     test_port_preflight
     test_pipefail_paths
     test_function_bodies
