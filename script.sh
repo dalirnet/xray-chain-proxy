@@ -66,7 +66,7 @@
 set -euo pipefail
 
 # Script info
-readonly VERSION="4.0.0"
+readonly VERSION="4.1.0"
 readonly SCRIPT_NAME="$(basename "$0")"
 
 # Directories and files
