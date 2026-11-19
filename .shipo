@@ -1,0 +1,11 @@
+[version]
+preset  = "custom"
+source  = "script.sh"
+pattern = 'readonly VERSION="{version}"'
+
+[build]
+command = ["make lint", "./test.sh"]
+
+[publish]
+push    = "origin/main"
+release = true
