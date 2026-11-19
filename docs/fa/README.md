@@ -243,10 +243,10 @@ vless://<uuid>@SERVER_IP:443?encryption=none&security=reality&type=tcp&flow=xtls
 ./xcp.sh start          # شروع سرویس (و تونل SSH)
 ./xcp.sh stop           # توقف سرویس
 ./xcp.sh status         # وضعیت Xray، تونل و کیفیت لینک
-./xcp.sh user ls        # لیست کاربران
+./xcp.sh user ls        # لیست کاربران (--qr برای QR کد)
 ./xcp.sh user add       # افزودن کاربر
 ./xcp.sh stats          # آمار ترافیک
-./xcp.sh config set     # تغییر پورت‌ها، سطح لاگ یا ریزالور DNS
+./xcp.sh config set     # تغییر پورت‌ها، سطح لاگ، ریزالور DNS، dest یا آدرس سرور
 ./xcp.sh dns ls         # چه کسی می‌تواند از ریزالور استفاده کند
 ./xcp.sh link ls        # نمایش لینک SSH گیت‌وی
 ./xcp.sh link health    # بررسی تونل به صورت سرتاسری

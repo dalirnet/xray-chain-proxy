@@ -243,10 +243,10 @@ Checks the SSH tunnel, proxies a request through the loopback SOCKS5 port to sho
 ./xcp.sh start          # Start service (and SSH tunnel)
 ./xcp.sh stop           # Stop service
 ./xcp.sh status         # Xray, tunnel, and link quality
-./xcp.sh user ls        # List users
+./xcp.sh user ls        # List users (--qr for QR codes)
 ./xcp.sh user add       # Add user
 ./xcp.sh stats          # Traffic statistics
-./xcp.sh config set     # Change ports, log level or DNS resolver
+./xcp.sh config set     # Change ports, log level, DNS resolver, REALITY dest or address
 ./xcp.sh dns ls         # Who may use the resolver
 ./xcp.sh link ls        # Show gateway SSH link
 ./xcp.sh link health    # Check the tunnel end to end

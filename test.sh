@@ -1133,6 +1133,59 @@ test_protocol_modes() {
     rm -rf "$TEST_DIR"
 }
 
+test_share_qr() {
+    test_section "Testing Share QR Codes"
+
+    local TEST_DIR="/tmp/xcp-test-$$"
+    mkdir -p "$TEST_DIR"
+
+    local clients='[{"email":"default","password":"p","method":"aes-256-gcm","id":"11111111-2222-3333-4444-555555555555"},{"email":"bob","password":"q","method":"aes-256-gcm","id":"66666666-7777-8888-9999-000000000000"}]'
+    local reality='{"port":443,"dest":"www.cloudflare.com","privateKey":"P","publicKey":"K","shortId":"ab"}'
+    local CFG="$TEST_DIR/both.json" lib="$TEST_DIR/lib.sh"
+    xcp_call "gen_gateway_config 8443 '$clients' 1.1.1.1 '$reality' 53 80 203.0.113.1" > "$CFG"
+    sed '$d' "$SCRIPT_PATH" | sed "s#^readonly XRAY_CONFIG=.*#readonly XRAY_CONFIG=\"$CFG\"#" > "$lib"
+
+    # qrencode stub: marks each QR with the protocol of the URI it encodes
+    local stubs='check_root() { :; }; apply_config() { :; }; sleep() { :; }
+        generate_uuid() { echo aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee; }
+        qrencode() { echo "QR:${3%%://*}"; }'
+    local ls_out qr_out one_out none_out
+
+    ls_out=$(bash -c "source '$lib'; $stubs; user_ls" 2>&1 || true)
+    qr_out=$(bash -c "source '$lib'; $stubs; user_ls --qr" 2>&1 || true)
+    one_out=$(bash -c "source '$lib'; $stubs; user_ls -q bob" 2>&1 || true)
+
+    test_assert "user ls prints no QR by default" "! echo '$ls_out' | grep -q '^QR:'" || true
+    test_assert "user ls prints both URIs" \
+        "echo '$ls_out' | grep -q 'VLESS URI: vless://' && echo '$ls_out' | grep -q 'SS URI: ss://'" || true
+    test_assert "user ls --qr prints a VLESS and an SS QR per account" \
+        "[[ \$(echo '$qr_out' | grep -c '^QR:vless') -eq 2 && \$(echo '$qr_out' | grep -c '^QR:ss') -eq 2 ]]" || true
+    test_assert "user ls -q <name> shows only that account" \
+        "echo '$one_out' | grep -q 'bob' && ! echo '$one_out' | grep -q 'default' && [[ \$(echo '$one_out' | grep -c '^QR:') -eq 2 ]]" || true
+    local rc_unknown=0 rc_option=0
+    bash -c "source '$lib'; $stubs; user_ls nobody" &>/dev/null || rc_unknown=$?
+    bash -c "source '$lib'; $stubs; user_ls --nope" &>/dev/null || rc_option=$?
+    test_assert "user ls <unknown> fails" "[[ $rc_unknown -ne 0 ]]" || true
+    test_assert "user ls rejects an unknown option" "[[ $rc_option -ne 0 ]]" || true
+
+    # No qrencode: a command shim hides it and leaves every other tool in place
+    local none_log="$TEST_DIR/none.log"
+    bash -c "source '$lib'; check_root() { :; }; command() { [[ \"\$2\" == qrencode ]] && return 1; builtin command \"\$@\"; }; user_ls --qr" > "$none_log" 2>&1 || true
+    test_assert "user ls --qr without qrencode warns and still lists URIs" \
+        "grep -q 'qrencode is not installed' '$none_log' && grep -q 'SS URI: ss://' '$none_log'" || true
+
+    if [[ "$NAMEREF_OK" == "true" ]]; then
+        local add_out
+        add_out=$(bash -c "source '$lib'; $stubs; user_add <<< \$'carol\nsecret'" 2>&1 || true)
+        test_assert "user add prints a QR for VLESS and for SS" \
+            "echo '$add_out' | grep -q '^QR:vless' && echo '$add_out' | grep -q '^QR:ss'" || true
+    else
+        echo "  - skipped user add: bash ${BASH_VERSION%%(*} has no namerefs"
+    fi
+
+    rm -rf "$TEST_DIR"
+}
+
 test_setup_rollback() {
     test_section "Testing Setup Rollback"
 
@@ -1271,6 +1324,64 @@ show_results() {
     fi
 }
 
+test_server_address() {
+    test_section "Testing Server Address"
+
+    local TEST_DIR="/tmp/xcp-test-$$"
+    local EDGE="$TEST_DIR/edge.json"
+    local GW="$TEST_DIR/gateway.json"
+    mkdir -p "$TEST_DIR"
+
+    local clients='[{"email":"a","password":"p","method":"aes-256-gcm"}]'
+
+    # curl stubs: each lookup service answers, fails or returns junk
+    local first_ok='curl() { case "$*" in *ifconfig*) echo 203.0.113.5 ;; *) echo 198.51.100.7 ;; esac; }'
+    local first_down='curl() { case "$*" in *ifconfig*) return 7 ;; *ipmyp*) echo 198.51.100.7 ;; esac; }'
+    local first_junk='curl() { case "$*" in *ifconfig*) echo "<html>blocked</html>" ;; *ipmyp*) echo 198.51.100.7 ;; esac; }'
+    local all_down='curl() { return 7; }'
+
+    test_assert "First lookup answers" "[[ \"\$(xcp_call '$first_ok; get_public_ip')\" == '203.0.113.5' ]]" || true
+    test_assert "Falls back to api.ipmyp.ir when the first is down" \
+        "[[ \"\$(xcp_call '$first_down; get_public_ip')\" == '198.51.100.7' ]]" || true
+    test_assert "Falls back when the first answers with junk" \
+        "[[ \"\$(xcp_call '$first_junk; get_public_ip')\" == '198.51.100.7' ]]" || true
+    test_assert "No answer fails and prints nothing" \
+        "out=\$(xcp_call '$all_down; get_public_ip'); [[ \$? -ne 0 && -z \"\$out\" ]]" || true
+
+    # Setup stores the address, and readers use it without a lookup
+    xcp_call "gen_edge_config 8443 '$clients' 203.0.113.9 22 xcp 1.1.1.1 '' 53 80 185.92.36.110" > "$EDGE"
+    xcp_call "gen_gateway_config 8443 '$clients' 1.1.1.1 '' 53 80 vpn.example.com" > "$GW"
+    test_assert "Edge config with address is valid JSON" "jq -e . '$EDGE' &>/dev/null" || true
+    test_assert "Edge stores the address" "[[ \"\$(jq -r '.xcp.address' '$EDGE')\" == '185.92.36.110' ]]" || true
+    test_assert "Gateway stores the address" "[[ \"\$(jq -r '.xcp.address' '$GW')\" == 'vpn.example.com' ]]" || true
+    test_assert "Stored address is used with no lookup" \
+        "[[ \"\$(xcp_call 'curl() { echo LOOKED-UP; }; cfg_address $EDGE')\" == '185.92.36.110' ]]" || true
+
+    # Configs from before xcp.address fall back to a lookup
+    echo '{"xcp":{"type":"edge"},"inbounds":[]}' > "$EDGE"
+    test_assert "Missing address falls back to a lookup" \
+        "[[ \"\$(xcp_call '$first_down; cfg_address $EDGE')\" == '198.51.100.7' ]]" || true
+    test_assert "Missing address with no lookup reads as a placeholder" \
+        "[[ \"\$(xcp_call '$all_down; cfg_address $EDGE')\" == 'YOUR_SERVER_IP' ]]" || true
+
+    # link set rebuilds the config and must carry the address over
+    test_assert "link set carries the address over" \
+        "xcp_call 'declare -f link_set' | grep -q 'xcp.address'" || true
+
+    if [[ "$NAMEREF_OK" == "true" ]]; then
+        test_assert "Setup offers the detected IP as the default" \
+            "[[ \"\$(printf '\n' | xcp_call '$first_ok; prompt_server_address A >/dev/null; echo \$A')\" == '203.0.113.5' ]]" || true
+        test_assert "Setup takes a typed address over the detected one" \
+            "[[ \"\$(printf 'edge.example.com\n' | xcp_call '$first_ok; prompt_server_address A >/dev/null; echo \$A')\" == 'edge.example.com' ]]" || true
+        test_assert "Setup asks for the address when detection fails" \
+            "[[ \"\$(printf '\nbad addr\n192.0.2.4\n' | xcp_call '$all_down; prompt_server_address A >/dev/null 2>&1; echo \$A')\" == '192.0.2.4' ]]" || true
+    else
+        echo "  - skipped address prompts: bash ${BASH_VERSION%%(*} has no namerefs"
+    fi
+
+    rm -rf "$TEST_DIR"
+}
+
 main() {
     echo -e "${BOLD}${CYAN}"
     echo "================================"
@@ -1292,7 +1403,9 @@ main() {
     test_dns_access
     test_firewall
     test_custom_ports
+    test_server_address
     test_protocol_modes
+    test_share_qr
     test_setup_rollback
     test_port_preflight
     test_pipefail_paths

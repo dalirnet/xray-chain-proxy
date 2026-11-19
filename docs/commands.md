@@ -10,7 +10,7 @@ Install and configure as exit node.
 ./xcp.sh setup gateway
 ```
 
-Installs Xray and applies the BBR network tuning. It then asks which client protocols to offer — both (the default), VLESS+REALITY only, or Shadowsocks only — and prompts for the ports of those protocols, VLESS (443) and Shadowsocks (8443), plus IP echo (80), DNS (53) and a DNS resolver. Enter keeps each default.
+Installs Xray and applies the BBR network tuning. It then asks for the server address — the detected public IP is the default, so Enter keeps it, or type another IP or domain; when detection fails, type it in. Share URIs use this address from then on. Next it asks which client protocols to offer — both (the default), VLESS+REALITY only, or Shadowsocks only — and prompts for the ports of those protocols, VLESS (443) and Shadowsocks (8443), plus IP echo (80), DNS (53) and a DNS resolver. Enter keeps each default.
 
 With VLESS enabled, REALITY comes next: it asks for a `dest` domain (default `www.cloudflare.com`), checks that the domain answers with TLS 1.3 and HTTP/2, and generates the x25519 keypair and `shortId`.
 
@@ -26,7 +26,7 @@ Install and configure as entry node.
 ./xcp.sh setup edge
 ```
 
-Prompts for the gateway's SSH details (host, port, user, password), then the same protocol choice and ports as the gateway, a DNS resolver and — with VLESS enabled — a REALITY `dest` domain. Each EDGE picks its protocols and gets its own keypair, independent of the gateway's.
+Prompts for the server address the same way as the gateway, then the gateway's SSH details (host, port, user, password), then the same protocol choice and ports as the gateway, a DNS resolver and — with VLESS enabled — a REALITY `dest` domain. Each EDGE picks its protocols and gets its own keypair, independent of the gateway's.
 
 It then starts the `xray-tunnel` service, fetches a page through it to confirm the gateway answers, and installs the `xray-tunnel-health.timer` that keeps checking every 60 seconds.
 
@@ -108,9 +108,18 @@ Accounts:
 
 1) edge
    Password: xxxxxxxx
-   SS URI: ss://...
    VLESS URI: vless://...
+   SS URI: ss://...
 ```
+
+`--qr` adds a QR code above each share URI, and a username narrows the list to that one account — handy for handing a phone its links:
+
+```bash
+./xcp.sh user ls --qr
+./xcp.sh user ls --qr bob
+```
+
+The QR codes need `qrencode`; setup installs it when it can.
 
 ### `user add`
 
@@ -125,7 +134,7 @@ Add new user interactively.
 
 One account covers every enabled protocol: the password authenticates Shadowsocks and a generated UUID authenticates VLESS. On a VLESS-only server the UUID is the whole credential, so there is no password prompt.
 
-With `qrencode` installed it prints a QR code — of the VLESS URI where REALITY is configured, since that is the one to reach for on a restricted network.
+With `qrencode` installed it prints a QR code for each enabled protocol, VLESS first.
 
 ![User Add](https://raw.githubusercontent.com/dalirnet/xray-chain-proxy/main/showcase/gif/user-add.gif)
 
@@ -205,6 +214,7 @@ Config:
 
   Type:       edge
   Version:    3.x
+  Address:    185.92.36.110
   VLESS Port: 443
   REALITY:    www.cloudflare.com
   SS Port:    8443
@@ -230,6 +240,7 @@ Options:
 2. `port` - Change listen ports
 3. `dns` - Change the DNS resolver
 4. `dest` - Change the site REALITY borrows its handshake from
+5. `address` - Change the address share URIs point at
 
 Each is also reachable directly, skipping the menu:
 
@@ -238,6 +249,7 @@ Each is also reachable directly, skipping the menu:
 ./xcp.sh config port
 ./xcp.sh config dns
 ./xcp.sh config dest
+./xcp.sh config address
 ```
 
 ### `config port`
@@ -285,6 +297,24 @@ Answering TLS 1.3 with HTTP/2 makes a domain a candidate; completing a handshake
 The SNI in every share URI is this name, so changing it reissues the URIs — run `user ls` and reimport them.
 
 Known good: `www.cloudflare.com`, `dl.google.com`, `cdn.jsdelivr.net`, `www.speedtest.net`.
+
+### `config address`
+
+Change the address share URIs point at.
+
+```bash
+./xcp.sh config address
+```
+
+Setup stores this address in the config, and `user ls` and `user add` read it from there. The prompt offers the freshly detected public IP as the default; type a domain or another IP to use that instead. Detection asks `ifconfig.me` first and `api.ipmyp.ir` when the first gives no answer. Xray keeps running, and the share URIs are reissued — run `user ls` and reimport them.
+
+### `config dns`
+
+Change the DNS resolver.
+
+```bash
+./xcp.sh config dns
+```
 
 The DNS menu offers Cloudflare, Google and Quad9, two DoH endpoints, or a custom address. On an EDGE the choice is rewritten to `tcp://` so queries fit through the tunnel; a DoH URL is kept as typed. The change restarts Xray.
 

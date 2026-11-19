@@ -40,14 +40,14 @@
 #   script.sh stop              - Stop Xray service
 #   script.sh restart           - Restart Xray service
 #   script.sh status            - Show service status
-#   script.sh user ls           - List all users
+#   script.sh user ls [--qr] [u] - List users, with QR codes and for one user
 #   script.sh user add          - Add new user
 #   script.sh user rm           - Remove user
 #   script.sh stats             - Show traffic statistics
 #   script.sh logs [-f] [n]     - Show logs (-f to follow)
 #   script.sh test              - Test proxy and speed
 #   script.sh config ls         - Show current config
-#   script.sh config set        - Set log level, ports, DNS resolver or REALITY dest
+#   script.sh config set        - Set log level, ports, DNS resolver, REALITY dest or address
 #   script.sh dns ls            - Show the resolver and who may use it
 #   script.sh dns add [ip]      - Allow a client to use this server for DNS
 #   script.sh dns rm [ip]       - Revoke a client
@@ -147,6 +147,10 @@ readonly WEB_SOCKET="/etc/systemd/system/xcp-web.socket"
 readonly WEB_SERVICE="/etc/systemd/system/xcp-web@.service"
 readonly WEB_RESPONDER="${XRAY_DIR}/ip-echo.sh"
 readonly RESOLVED_DROPIN="/etc/systemd/resolved.conf.d/xcp.conf"
+
+# Public IP lookups, tried in order. Setup detects the address once and keeps
+# it in xcp.address, so share links never depend on these answering later.
+readonly IP_LOOKUP_URLS=("https://ifconfig.me/ip" "https://api.ipmyp.ir")
 
 # DNS resolver the servers answer with (plain IP, tcp://IP or a DoH URL)
 readonly DEFAULT_DNS="1.1.1.1"
@@ -291,6 +295,16 @@ cfg_web_port() {
     echo "${port:-$DEFAULT_WEB_PORT}"
 }
 
+# The address clients reach this server on, as set at setup. Configs that
+# predate xcp.address fall back to a live lookup.
+cfg_address() {
+    local config="${1:-$XRAY_CONFIG}" address=""
+    [[ -f "$config" ]] && \
+        address=$(jq -r '.xcp.address // empty' "$config" 2>/dev/null || true)
+    [[ -n "$address" ]] || address=$(get_public_ip) || address="YOUR_SERVER_IP"
+    echo "$address"
+}
+
 # The port of a client inbound by tag, or nothing when that protocol is off
 cfg_inbound_port() {
     local tag="$1" config="${2:-$XRAY_CONFIG}"
@@ -354,11 +368,15 @@ format_bytes() {
     echo "$((b / 1073741824)) GB"
 }
 
-# Get public IP address
+# Detect this server's public IPv4, trying each lookup service in turn.
+# Prints nothing and fails when none answers with an address.
 get_public_ip() {
-    local ip
-    ip=$(curl -s4 --connect-timeout 5 --max-time 10 "http://ip-api.com/line/?fields=query" 2>/dev/null | tr -d '[:space:]')
-    validate_address "$ip" && echo "$ip" || echo "YOUR_SERVER_IP"
+    local url ip
+    for url in "${IP_LOOKUP_URLS[@]}"; do
+        ip=$(curl -s4 --connect-timeout 5 --max-time 10 "$url" 2>/dev/null | tr -d '[:space:]' || true)
+        [[ "$ip" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]] && validate_address "$ip" && { echo "$ip"; return 0; }
+    done
+    return 1
 }
 
 # Detect system architecture
@@ -469,6 +487,29 @@ prompt_dns() {
         input="${input:-$default}"
         validate_dns "$input" && { _dns="$input"; break; }
         echo -e "${RED}Invalid resolver - use an IP (1.1.1.1) or a DoH URL (https://dns.google/dns-query)${NC}"
+    done
+}
+
+# Ask for the address clients reach this server on, offering the detected
+# public IP as the default. When detection fails the address must be typed.
+# Sets the named variable in the caller.
+prompt_server_address() {
+    local -n _server="$1"
+    local detected input
+
+    detected=$(get_public_ip) || detected=""
+    if [[ -z "$detected" ]]; then
+        log_warn "Could not detect this server's public IP"
+        prompt_address "Server address" _server
+        return 0
+    fi
+
+    log_info "Detected public IP: ${detected}"
+    while true; do
+        read -rp "Server address (default: ${detected}): " input
+        input="${input:-$detected}"
+        validate_address "$input" && { _server="$input"; break; }
+        echo -e "${RED}Invalid IP/domain${NC}"
     done
 }
 
@@ -1616,7 +1657,7 @@ EOF
 # loopback, for diagnostics.
 gen_gateway_config() {
     local ss_port="$1" clients="$2" dns="${3:-$DEFAULT_DNS}" reality="${4:-}"
-    local dns_port="${5:-$DEFAULT_DNS_PORT}" web_port="${6:-$DEFAULT_WEB_PORT}"
+    local dns_port="${5:-$DEFAULT_DNS_PORT}" web_port="${6:-$DEFAULT_WEB_PORT}" address="${7:-}"
     local dns_ip=$(dns_ip "$dns")
 
     cat << EOF
@@ -1624,6 +1665,7 @@ gen_gateway_config() {
   "xcp": {
     "type": "gateway",
     "version": "${VERSION}",
+    "address": "${address}",
     "dns": "${dns}",
     "web_port": ${web_port},
     "reality": $(gen_reality_meta "$reality")
@@ -1693,7 +1735,7 @@ EOF
 # so gw_host/gw_port/ssh_user are metadata only (used by 'link ls' and rebuilds).
 gen_edge_config() {
     local ss_port="$1" clients="$2" gw_host="$3" gw_port="$4" ssh_user="$5" dns="${6:-$DEFAULT_DNS}" reality="${7:-}"
-    local dns_port="${8:-$DEFAULT_DNS_PORT}" web_port="${9:-$DEFAULT_WEB_PORT}"
+    local dns_port="${8:-$DEFAULT_DNS_PORT}" web_port="${9:-$DEFAULT_WEB_PORT}" address="${10:-}"
     # The tunnel carries TCP only, so queries must not leave over UDP
     local dns_server=$(dns_over_tcp "$dns")
     local dns_ip=$(dns_ip "$dns")
@@ -1703,6 +1745,7 @@ gen_edge_config() {
   "xcp": {
     "type": "edge",
     "version": "${VERSION}",
+    "address": "${address}",
     "dns": "${dns}",
     "web_port": ${web_port},
     "reality": $(gen_reality_meta "$reality"),
@@ -2062,6 +2105,11 @@ setup_gateway() {
     install_xray
     tune_network
 
+    log_step "Server Address"
+
+    local IP
+    prompt_server_address IP
+
     log_step "Protocols and Ports"
 
     local USE_VLESS USE_SS SS_PORT DNS_SERVER VLESS_PORT WEB_PORT DNS_PORT REALITY_DEST REALITY=""
@@ -2080,10 +2128,9 @@ setup_gateway() {
     setup_initial_account
 
     free_dns_port "$DNS_PORT"
-    gen_gateway_config "$SS_PORT" "$USER_CLIENT" "$DNS_SERVER" "$REALITY" "$DNS_PORT" "$WEB_PORT" > "$XRAY_CONFIG"
+    gen_gateway_config "$SS_PORT" "$USER_CLIENT" "$DNS_SERVER" "$REALITY" "$DNS_PORT" "$WEB_PORT" "$IP" > "$XRAY_CONFIG"
     setup_finish
 
-    local IP=$(get_public_ip)
     local SSH_PORT=$(get_ssh_port)
 
     echo -e "\n${GREEN}GATEWAY Ready!${NC}"
@@ -2113,6 +2160,11 @@ setup_edge() {
     install_xray
     tune_network
 
+    log_step "Server Address"
+
+    local IP
+    prompt_server_address IP
+
     log_step "Gateway Details"
 
     local GW_HOST GW_PORT GW_USER GW_PASS
@@ -2134,10 +2186,8 @@ setup_edge() {
 
     free_dns_port "$DNS_PORT"
     gen_edge_config "$SS_PORT" "$USER_CLIENT" "$GW_HOST" "$GW_PORT" "$GW_USER" "$DNS_SERVER" "$REALITY" \
-        "$DNS_PORT" "$WEB_PORT" > "$XRAY_CONFIG"
+        "$DNS_PORT" "$WEB_PORT" "$IP" > "$XRAY_CONFIG"
     setup_finish
-
-    local IP=$(get_public_ip)
 
     echo -e "\n${GREEN}EDGE Ready!${NC}"
     echo -e "\n${BOLD}Chain:${NC} Client -> $IP -> ssh://$GW_HOST:$GW_PORT -> Internet"
@@ -2160,11 +2210,33 @@ setup_cmd() {
 
 # --- Users ---
 
-# List all users
-user_ls() {
-    require_accounts
+# Print a share URI, with its QR code above it when asked for and qrencode
+# is installed. Prints nothing for an empty URI - a protocol that is off.
+print_share_uri() {
+    local label="$1" uri="$2" qr="${3:-false}" indent="${4:-}"
+    [[ -n "$uri" ]] || return 0
+    [[ "$qr" == "true" ]] && command -v qrencode &>/dev/null && qrencode -t ANSIUTF8 "$uri"
+    echo "${indent}${label} URI: $uri"
+}
 
-    local IP=$(get_public_ip)
+# List all users. --qr adds a QR code for every share URI, and a username
+# narrows the list to that account.
+user_ls() {
+    local qr=false name="" arg
+    for arg in "$@"; do
+        case "$arg" in
+            -q|--qr) qr=true ;;
+            -*)      log_error "Unknown option: $arg - usage: $SCRIPT_NAME user ls [--qr] [username]" ;;
+            *)       name="$arg" ;;
+        esac
+    done
+
+    require_accounts
+    [[ -z "$name" ]] || account_exists "$name" || log_error "No account named '$name'"
+    [[ "$qr" == "true" ]] && ! command -v qrencode &>/dev/null && \
+        log_warn "qrencode is not installed - showing URIs only (apt install qrencode)"
+
+    local IP=$(cfg_address)
     local SS_PORT=$(cfg_ss_port)
     local REALITY=$(jq -c '.xcp.reality // null' "$XRAY_CONFIG")
     local clients=$(jq -r --arg t "$(accounts_inbound)" \
@@ -2183,15 +2255,23 @@ user_ls() {
     else
         local i=1
         while IFS='|' read -r email pass id; do
+            [[ -z "$name" || "$email" == "$name" ]] || { i=$((i + 1)); continue; }
             echo -e "${CYAN}$i) $email${NC}"
 
+            local ss_uri=""
             if [[ -n "$SS_PORT" ]]; then
                 echo -e "   Password: ${YELLOW}$pass${NC}"
-                echo "   SS URI: $(gen_ss_uri "$ENCRYPTION_METHOD" "$pass" "$IP" "$SS_PORT" "$email")"
+                ss_uri=$(gen_ss_uri "$ENCRYPTION_METHOD" "$pass" "$IP" "$SS_PORT" "$email")
             fi
-
             local vless_uri=$(gen_vless_uri "$id" "$IP" "$REALITY" "$email")
-            [[ -n "$vless_uri" ]] && echo "   VLESS URI: $vless_uri"
+
+            if [[ "$qr" == "true" ]]; then
+                [[ -n "$vless_uri" ]] && { echo; print_share_uri VLESS "$vless_uri" true; }
+                [[ -n "$ss_uri" ]] && { echo; print_share_uri SS "$ss_uri" true; }
+            else
+                print_share_uri VLESS "$vless_uri" false "   "
+                print_share_uri SS "$ss_uri" false "   "
+            fi
 
             echo
             i=$((i + 1))
@@ -2241,7 +2321,7 @@ user_add() {
     apply_config
     sleep 1
 
-    local IP=$(get_public_ip)
+    local IP=$(cfg_address)
     local URI=""
     [[ -n "$SS_PORT" ]] && URI=$(gen_ss_uri "$ENCRYPTION_METHOD" "$PASS" "$IP" "$SS_PORT" "$EMAIL")
     local VLESS_URI=$(gen_vless_uri "$UUID" "$IP" "$REALITY" "$EMAIL")
@@ -2257,16 +2337,11 @@ user_add() {
         echo -e "  Password:   ${YELLOW}$PASS${NC}"
     echo
 
-    # VLESS carries UDP and resists probing, so it leads and gets the QR code
-    if [[ -n "$VLESS_URI" ]]; then
-        command -v qrencode &>/dev/null && qrencode -t ANSIUTF8 "$VLESS_URI"
-        echo "VLESS URI: $VLESS_URI"
-        [[ -n "$URI" ]] && echo
-    else
-        command -v qrencode &>/dev/null && qrencode -t ANSIUTF8 "$URI"
-    fi
-
-    [[ -n "$URI" ]] && echo "SS URI: $URI"
+    # A QR code per enabled protocol. VLESS carries UDP and resists probing,
+    # so it leads.
+    print_share_uri VLESS "$VLESS_URI" true
+    [[ -n "$VLESS_URI" && -n "$URI" ]] && echo
+    print_share_uri SS "$URI" true
     return 0
 }
 
@@ -2295,10 +2370,10 @@ user_rm() {
 # User command router
 user_cmd() {
     case "${1:-}" in
-        ls)   user_ls ;;
+        ls)   shift; user_ls "$@" ;;
         add)  user_add ;;
         rm)   user_rm ;;
-        *)    echo -e "\nUsage: $SCRIPT_NAME user <ls|add|rm>\n" ;;
+        *)    echo -e "\nUsage: $SCRIPT_NAME user <ls [--qr] [username]|add|rm>\n" ;;
     esac
 }
 
@@ -2346,12 +2421,13 @@ config_ls() {
     echo -e "\n${BOLD}Config:${NC}\n"
     echo -e "  Type:       ${YELLOW}$type${NC}"
     echo -e "  Version:    ${YELLOW}$version${NC}"
+    echo -e "  Address:    ${YELLOW}$(cfg_address)${NC}"
     if [[ "$reality" != "null" ]]; then
         echo -e "  VLESS Port: ${YELLOW}$(echo "$reality" | jq -r '.port')${NC}"
         echo -e "  REALITY:    ${YELLOW}$(echo "$reality" | jq -r '.dest')${NC}"
     fi
     [[ -n "$ss_port" ]] && echo -e "  SS Port:    ${YELLOW}$ss_port${NC}"
-    echo -e "  Echo Port:${YELLOW}$(cfg_web_port)${NC}"
+    echo -e "  Echo Port:  ${YELLOW}$(cfg_web_port)${NC}"
     echo -e "  SOCKS Port: ${YELLOW}$LOCAL_SOCKS_PORT${NC} ${CYAN}(loopback)${NC}"
     echo -e "  DNS Port:   ${YELLOW}$(cfg_dns_port)${NC}"
     echo -e "  DNS Server: ${YELLOW}$dns${NC}"
@@ -2561,22 +2637,41 @@ config_dest() {
 }
 
 # Config set submenu
+# The address share URIs point at. Metadata only - Xray keeps running as is.
+config_address() {
+    check_root
+    require_config
+
+    echo -e "\n${BOLD}Server Address${NC}\n"
+    echo -e "Current: ${YELLOW}$(cfg_address)${NC}\n"
+
+    local ADDRESS
+    prompt_server_address ADDRESS
+
+    jq --arg a "$ADDRESS" '.xcp.address = $a' "$XRAY_CONFIG" | config_write
+
+    log_success "Server address set to ${ADDRESS}"
+    log_warn "The share URIs changed - run '${SCRIPT_NAME} user ls' and reimport them"
+}
+
 config_set() {
     echo -e "\n${BOLD}Set Config:${NC}\n"
     echo "  1) loglevel - Set log level"
     echo "  2) port     - Change listen port"
     echo "  3) dns      - Change DNS resolver"
     echo "  4) dest     - Change REALITY dest"
+    echo "  5) address  - Change server address"
     echo
 
     local choice
-    read -rp "Select option (1-4): " choice
+    read -rp "Select option (1-5): " choice
 
     case "$choice" in
         1|loglevel) config_loglevel ;;
         2|port)     config_port ;;
         3|dns)      config_dns ;;
         4|dest)     config_dest ;;
+        5|address)  config_address ;;
         *)          log_error "Invalid option" ;;
     esac
 }
@@ -2590,7 +2685,8 @@ config_cmd() {
         port)     config_port ;;
         dns)      config_dns ;;
         dest)     config_dest ;;
-        *)        echo -e "\nUsage: $SCRIPT_NAME config <ls|set|loglevel|port|dns|dest>\n" ;;
+        address)  config_address ;;
+        *)        echo -e "\nUsage: $SCRIPT_NAME config <ls|set|loglevel|port|dns|dest|address>\n" ;;
     esac
 }
 
@@ -3003,10 +3099,11 @@ link_set() {
           end' "$XRAY_CONFIG")
 
     local dns_port=$(cfg_dns_port) web_port=$(cfg_web_port)
+    local address=$(jq -r '.xcp.address // empty' "$XRAY_CONFIG")
 
     local TMP=$(mktemp)
     gen_edge_config "$ss_port" "$clients" "$GW_HOST" "$GW_PORT" "$GW_USER" "$dns" "$reality" \
-        "$dns_port" "$web_port" > "$TMP"
+        "$dns_port" "$web_port" "$address" > "$TMP"
 
     jq --argjson custom "$custom" --argjson log "$logcfg" --argjson allow "$dns_allow" \
         "$JQ_INSERT_RULES .log = \$log | .xcp.dns_allow = \$allow | insert_rules(\$custom)" \
@@ -3459,7 +3556,7 @@ Commands:
   restart           Restart Xray service
   status            Show service status
 
-  user ls           List users
+  user ls           List users (--qr adds QR codes, a name shows one user)
   user add          Add user
   user rm           Remove user
 
@@ -3468,7 +3565,7 @@ Commands:
   test              Test proxy and speed
 
   config ls         Show current config
-  config set        Set log level, ports, DNS resolver or REALITY dest
+  config set        Set log level, ports, DNS resolver, REALITY dest or address
                     (or go straight there: config loglevel|port|dns|dest)
 
   dns ls            Show the resolver and who may use it
@@ -3501,7 +3598,7 @@ main() {
         stop)      service_stop ;;
         restart)   service_restart ;;
         status)    show_status ;;
-        user)      user_cmd "${2:-}" ;;
+        user)      shift; user_cmd "$@" ;;
         stats)     show_stats ;;
         logs)      shift; show_logs "$@" ;;
         test)      test_proxy ;;
