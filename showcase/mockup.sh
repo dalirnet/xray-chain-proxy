@@ -40,13 +40,14 @@ QR='█████████████████████████�
 █████████████████████████████'
 
 GW_IP="104.28.55.73"; EDGE_IP="185.92.36.110"
-SS_PORT="8443"; LOCAL_SOCKS_PORT="11080"; DNS_PORT="53"
-VLESS_PORT="443"; REALITY_DEST="www.bing.com"
+SS_PORT="8443"; LOCAL_SOCKS_PORT="11080"; DNS_PORT="53"; WEB_PORT="80"
+VLESS_PORT="443"; REALITY_DEST="www.cloudflare.com"
 SSH_USER="xcp"; SSH_PASS="kQ8vR2mZpL4xN7wD"; DNS_SERVER="1.1.1.1"
+XRAY_VERSION="26.11.9"
 DEMO_USER="john"
 DEMO_PASS="bT5sD1fG8hY3oK7w"
 DEMO_URI="ss://YWVzLTI1Ni1nY206YlQ1c0QxZkc4aFkzb0s3dw==@185.92.36.110:8443#john"
-DEMO_VLESS="vless://8f3a1c2e-5b7d-4e91-a6f0-2d84bc9e1357@185.92.36.110:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.bing.com&fp=chrome&pbk=T9xKp2mVqL8nR4wZ3cJ7yB5dF1hG6sA0eN2uX8vC4kM&sid=a1b2c3d4e5f60718&spx=%2F#john"
+DEMO_VLESS="vless://8f3a1c2e-5b7d-4e91-a6f0-2d84bc9e1357@185.92.36.110:443?encryption=none&security=reality&type=tcp&flow=xtls-rprx-vision&sni=www.cloudflare.com&fp=chrome&pbk=T9xKp2mVqL8nR4wZ3cJ7yB5dF1hG6sA0eN2uX8vC4kM&sid=a1b2c3d4e5f60718&spx=%2F#john"
 
 PROMPT="${GREEN}root@ubuntu${NC}:${CYAN}~${NC}# "
 
@@ -137,15 +138,8 @@ record_demo() {
 # Demo scenes
 # =====================
 
-run_setup_gateway() {
-    echo -ne "$PROMPT"
-    sleep 0.5
-    type_cmd "./xcp.sh setup gateway"; sleep 0.3; printf '\n'
-    sleep 0.3
-
-    echo -e "\n${BOLD}GATEWAY Setup${NC} (Exit Node)\n"
-    sleep 0.3
-
+# Shared opening of both setups: dependencies, Xray, network tuning
+scene_install() {
     echo -e "\n${BOLD}>>> Checking dependencies${NC}"
     sleep 0.4
     echo -e "${GREEN}[OK]${NC} Dependencies ready"
@@ -153,16 +147,29 @@ run_setup_gateway() {
 
     echo -e "\n${BOLD}>>> Installing Xray-core${NC}"
     sleep 0.3
-    echo -e "${CYAN}[INFO]${NC} Version: v25.1.30"
-    sleep 0.2
-    echo -e "${GREEN}[OK]${NC} Xray installed"
+    echo -e "${GREEN}[OK]${NC} Xray installed: ${XRAY_VERSION}"
     sleep 0.3
 
-    echo -e "\n${BOLD}>>> Configure Ports${NC}"
+    echo -e "\n${BOLD}>>> Network Tuning${NC}"
+    sleep 0.3
+    echo -e "${GREEN}[OK]${NC} BBR congestion control and 16MB socket buffers active"
+    sleep 0.3
+}
+
+# Protocol menu, ports, resolver and REALITY - all defaults accepted
+scene_client_settings() {
+    echo -e "\n${BOLD}>>> Protocols and Ports${NC}"
     sleep 0.2
-    echo -n "VLESS (REALITY) port [443]: "; prompt_default
-    echo -n "Shadowsocks port [8443]: "; prompt_default
-    echo -n "DNS resolver [1.1.1.1]: "; prompt_default
+    echo "Client protocols:"
+    echo "  1) Both VLESS+REALITY and Shadowsocks"
+    echo "  2) VLESS+REALITY only"
+    echo "  3) Shadowsocks only"
+    echo -n "Select (1-3, default: 1): "; prompt_default
+    echo -n "VLESS (REALITY) port (default: ${VLESS_PORT}): "; prompt_default
+    echo -n "Shadowsocks port (default: ${SS_PORT}): "; prompt_default
+    echo -n "IP echo port (default: ${WEB_PORT}): "; prompt_default
+    echo -n "DNS port (default: ${DNS_PORT}): "; prompt_default
+    echo -n "DNS resolver (default: ${DNS_SERVER}): "; prompt_default
     sleep 0.3
 
     echo -e "\n${BOLD}>>> REALITY${NC}"
@@ -173,6 +180,29 @@ run_setup_gateway() {
     sleep 0.2
     echo -e "${GREEN}[OK]${NC} REALITY keys generated, borrowing ${REALITY_DEST}"
     sleep 0.3
+}
+
+# Config written, IP echo up, Xray running, REALITY checked end to end
+scene_finish() {
+    echo -e "${GREEN}[OK]${NC} Configuration valid"
+    sleep 0.2
+    echo -e "${GREEN}[OK]${NC} Port ${WEB_PORT} answers with the caller's IP"
+    sleep 0.5
+    echo -e "${GREEN}[OK]${NC} REALITY handshake verified through ${REALITY_DEST}"
+    sleep 0.3
+}
+
+run_setup_gateway() {
+    echo -ne "$PROMPT"
+    sleep 0.5
+    type_cmd "./xcp.sh setup gateway"; sleep 0.3; printf '\n'
+    sleep 0.3
+
+    echo -e "\n${BOLD}GATEWAY Setup${NC} (Exit Node)"
+    sleep 0.3
+
+    scene_install
+    scene_client_settings
 
     echo -e "\n${BOLD}>>> SSH Access${NC}"
     sleep 0.2
@@ -182,7 +212,9 @@ run_setup_gateway() {
     echo -e "${GREEN}[OK]${NC} SSH user '${SSH_USER}' created"
     sleep 0.3
     echo -e "${GREEN}[OK]${NC} sshd accepts tunnel logins from '${SSH_USER}'"
-    sleep 0.4
+    sleep 0.3
+
+    scene_finish
 
     echo -e "\n${GREEN}GATEWAY Ready!${NC}"
     sleep 0.2
@@ -199,6 +231,8 @@ run_setup_gateway() {
     echo -e "\n${BOLD}Loopback only (127.0.0.1):${NC}"
     echo -e "  SOCKS Port: ${YELLOW}${LOCAL_SOCKS_PORT}${NC} (diagnostics)"
     echo -e "  DNS Port:   ${YELLOW}${DNS_PORT}${NC} (${DNS_SERVER})"
+    echo -e "\n${BOLD}Public:${NC}"
+    echo -e "  IP echo:    ${YELLOW}${WEB_PORT}${NC}"
     sleep 0.1
 }
 
@@ -208,44 +242,20 @@ run_setup_edge() {
     type_cmd "./xcp.sh setup edge"; sleep 0.3; printf '\n'
     sleep 0.3
 
-    echo -e "\n${BOLD}EDGE Setup${NC} (Entry Node)\n"
+    echo -e "\n${BOLD}EDGE Setup${NC} (Entry Node)"
     sleep 0.3
 
-    echo -e "\n${BOLD}>>> Checking dependencies${NC}"
-    sleep 0.4
-    echo -e "${GREEN}[OK]${NC} Dependencies ready"
-    sleep 0.3
-
-    echo -e "\n${BOLD}>>> Installing Xray-core${NC}"
-    sleep 0.3
-    echo -e "${CYAN}[INFO]${NC} Version: v25.1.30"
-    sleep 0.2
-    echo -e "${GREEN}[OK]${NC} Xray installed"
-    sleep 0.3
+    scene_install
 
     echo -e "\n${BOLD}>>> Gateway Details${NC}"
     sleep 0.2
     echo -n "Gateway host: "; prompt_type "$GW_IP"
-    echo -n "Gateway SSH port [22]: "; prompt_default
-    echo -n "Gateway SSH user [xcp]: "; prompt_default
+    echo -n "Gateway SSH port (default: 22): "; prompt_default
+    echo -n "Gateway SSH user (default: ${SSH_USER}): "; prompt_default
     echo -n "Gateway SSH password: "; prompt_default
     sleep 0.2
 
-    echo -e "\n${BOLD}>>> Edge Settings${NC}"
-    sleep 0.2
-    echo -n "VLESS (REALITY) port [443]: "; prompt_default
-    echo -n "Shadowsocks port [8443]: "; prompt_default
-    echo -n "DNS resolver [1.1.1.1]: "; prompt_default
-    sleep 0.3
-
-    echo -e "\n${BOLD}>>> REALITY${NC}"
-    sleep 0.2
-    echo -n "REALITY dest domain (default: ${REALITY_DEST}): "; prompt_default
-    sleep 0.4
-    echo -e "${GREEN}[OK]${NC} ${REALITY_DEST} serves TLS 1.3 with HTTP/2"
-    sleep 0.2
-    echo -e "${GREEN}[OK]${NC} REALITY keys generated, borrowing ${REALITY_DEST}"
-    sleep 0.3
+    scene_client_settings
 
     echo -e "\n${BOLD}>>> SSH Tunnel${NC}"
     sleep 0.4
@@ -254,11 +264,23 @@ run_setup_edge() {
     echo -e "${GREEN}[OK]${NC} Tunnel up on 127.0.0.1:10080"
     sleep 0.5
     echo -e "${GREEN}[OK]${NC} Gateway reachable through the tunnel"
+    sleep 0.2
+    echo -e "${GREEN}[OK]${NC} Health check runs every 60s"
     sleep 0.3
+
+    scene_finish
 
     echo -e "\n${GREEN}EDGE Ready!${NC}"
     sleep 0.2
     echo -e "\n${BOLD}Chain:${NC} Client -> ${EDGE_IP} -> ssh://${GW_IP}:22 -> Internet"
+    echo -e "\n${BOLD}Connection Details:${NC}"
+    echo -e "  IP:         ${YELLOW}${EDGE_IP}${NC}"
+    echo -e "  VLESS Port: ${YELLOW}${VLESS_PORT}${NC} (REALITY, borrowing ${REALITY_DEST})"
+    echo -e "  SS Port:    ${YELLOW}${SS_PORT}${NC}"
+    echo -e "  Username:   ${YELLOW}default${NC}"
+    echo -e "  Password:   ${YELLOW}Hn3vYq8cTb6mWx2L${NC}"
+    echo -e "  DNS:        ${YELLOW}${DNS_SERVER}${NC} (loopback ${DNS_PORT})"
+    echo -e "  IP echo:    ${YELLOW}${WEB_PORT}${NC}"
     sleep 0.1
 }
 
@@ -270,6 +292,7 @@ run_user_add() {
 
     echo -n "Username: "; prompt_type "$DEMO_USER"
     echo -n "Password (empty=generate): "; prompt_default
+    echo -e "${CYAN}[INFO]${NC} Generated: ${DEMO_PASS}"
     sleep 0.3
 
     echo -e "\n${GREEN}Account '${DEMO_USER}' Added${NC}"
@@ -278,10 +301,9 @@ run_user_add() {
     echo -e "  VLESS Port: ${YELLOW}${VLESS_PORT}${NC}"
     echo -e "  SS Port:    ${YELLOW}${SS_PORT}${NC}"
     echo -e "  Username:   ${YELLOW}${DEMO_USER}${NC}"
-    echo -e "  Password:   ${YELLOW}********${NC}\n"
+    echo -e "  Password:   ${YELLOW}${DEMO_PASS}${NC}\n"
     sleep 0.8
     echo "$QR"
-    echo ""
     echo "VLESS URI: ${DEMO_VLESS}"
     echo ""
     echo "SS URI: ${DEMO_URI}"
@@ -297,7 +319,7 @@ run_status() {
     echo -e "\n${BOLD}Status:${NC}\n"
     sleep 0.3
     echo -e "Xray:   ${GREEN}● Running${NC}"
-    echo "Version: 25.1.30"
+    echo "Version: ${XRAY_VERSION}"
     sleep 0.2
     echo -e "Tunnel: ${GREEN}● Running${NC}"
     sleep 0.2
@@ -306,7 +328,7 @@ run_status() {
     sleep 0.2
     echo -e "Health: ${GREEN}● Checking every 60s${NC}"
     sleep 0.2
-    echo -e "Echo:   ${GREEN}● Answering on port 80${NC}"
+    echo -e "Echo:   ${GREEN}● Answering on port ${WEB_PORT}${NC}"
     sleep 0.1
 }
 
@@ -451,9 +473,9 @@ case "${1:-}" in
         # the top of the frame is lost. Check with:
         #   ./mockup.sh __run_<name> | wc -l
         DEMOS=(
-            "setup-gateway:47"
-            "setup-edge:38"
-            "user-add:29"
+            "setup-gateway:61"
+            "setup-edge:59"
+            "user-add:33"
             "status:13"
             "stats:12"
             "test:20"

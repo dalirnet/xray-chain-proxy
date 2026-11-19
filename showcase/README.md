@@ -4,11 +4,13 @@ Visual guide to Xray Chain Proxy CLI commands.
 
 ## Setup Gateway
 
-Start here. The gateway is your **exit node** — a server with unrestricted internet access. This command installs Xray-core, applies the BBR network tuning, and configures the client ports and DNS resolver.
+Start here. The gateway is your **exit node** — a server with unrestricted internet access. This command installs Xray-core and applies the BBR network tuning. It then asks which client protocols to offer — both VLESS+REALITY and Shadowsocks (the default), or either one alone — and for the ports: VLESS 443, Shadowsocks 8443, IP echo 80 and DNS 53 by default. The DNS resolver comes last.
 
-Next comes REALITY: it asks for a `dest` domain to borrow, checks that the domain really answers with TLS 1.3 and HTTP/2, and generates the keypair. Then it sets up SSH access for the chain — the shell-less `xcp` user with a password (press Enter for a generated 32-character one), allowed in `sshd_config`.
+Next comes REALITY: it asks for a `dest` domain to borrow (`www.cloudflare.com` by default), checks that the domain really answers with TLS 1.3 and HTTP/2, and generates the keypair. Then it sets up SSH access for the chain — the shell-less `xcp` user with a password (press Enter for a generated 32-character one), allowed in `sshd_config`.
 
-Note the gateway IP, SSH port, user and password — the edge asks for all four, and the password is shown once.
+Once Xray runs on the new config, setup confirms the REALITY handshake end to end. Note the gateway IP, SSH port, user and password — the edge asks for all four, and the password is shown once.
+
+If setup stops early — an error or Ctrl+C — it undoes its changes and brings back whatever was running before, so the next run starts clean.
 
 ```bash
 ./xcp.sh setup gateway
@@ -18,7 +20,7 @@ Note the gateway IP, SSH port, user and password — the edge asks for all four,
 
 ## Setup Edge
 
-Next, set up the **entry node** — a server close to you in the restricted region. You'll be prompted for the gateway's SSH host, port, user and password from the previous step, then for this server's own ports, resolver and REALITY dest — each edge gets its own keypair.
+Next, set up the **entry node** — a server close to you in the restricted region. You'll be prompted for the gateway's SSH host, port, user and password from the previous step, then for this server's own protocols, ports, resolver and REALITY dest — each edge gets its own keypair.
 
 Setup checks the login, brings up the `xray-tunnel` service, and fetches a page through the tunnel to confirm the gateway's Xray answers on the other side. It also installs the health timer that keeps checking every 60 seconds. Traffic then continues through the gateway's routing rules on its way out.
 
@@ -30,9 +32,9 @@ Setup checks the login, brings up the `xray-tunnel` service, and fetches a page 
 
 ## Add User
 
-Add a client account to the edge server. Enter a username and optionally a password (leave empty to auto-generate). One account covers both protocols — the password authenticates Shadowsocks and a generated UUID authenticates VLESS.
+Add a client account to the edge server. Enter a username and optionally a password (leave empty to auto-generate). One account covers every enabled protocol — the password authenticates Shadowsocks and a generated UUID authenticates VLESS. A VLESS-only server asks for no password.
 
-The output includes the server IP, ports, credentials, a QR code for mobile apps, and both share URIs to copy into a client.
+The output includes the server IP, ports, credentials, a QR code of the VLESS link for mobile apps, and a share URI per protocol to copy into a client.
 
 ```bash
 ./xcp.sh user add
